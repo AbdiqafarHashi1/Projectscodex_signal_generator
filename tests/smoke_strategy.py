@@ -6,13 +6,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Make repo root importable
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+# If your file is codex_v3.py, use:  import codex_v3 as strat
 import codex_strategy as strat
 
 
 def build_df(rows: int, freq: str) -> pd.DataFrame:
     start = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    # Accept both "15min" and "15Min" etc.
     index = pd.date_range(start=start, periods=rows, freq=freq.replace("H", "h"))
     base = np.linspace(100, 110, rows)
     data = {
@@ -46,12 +49,14 @@ def reset_state():
     strat.last_atr_regime.update({pair: None for pair in strat.PAIRS})
     strat.last_volume_ok.update({pair: None for pair in strat.PAIRS})
     strat.diagnostic_cooldown.update({pair: strat.DIAG_RATE_LIMIT_CANDLES for pair in strat.PAIRS})
+    # Relax-mode trackers
     strat.quiet_candle_streak.update({pair: 0 for pair in strat.PAIRS})
     strat.relax_active.update({pair: False for pair in strat.PAIRS})
     strat.relax_candles_remaining.update({pair: 0 for pair in strat.PAIRS})
 
 
 def main():
+    # Silence outbound Telegram during tests
     os.environ["TELEGRAM_TOKEN"] = ""
     os.environ["TELEGRAM_CHAT_ID"] = ""
     captured = []
@@ -74,7 +79,7 @@ def main():
     strat.diagnose_candle("ETHUSDT", df_1h, ctx_1h)
     restore_interval(original_interval)
 
-    # Rate limit check
+    # Rate limit check (should send at most one DIAG at the threshold)
     reset_state()
     captured.clear()
     original_interval = ensure_interval("15m")
@@ -92,12 +97,12 @@ def main():
     strat.SHORT_SCORE_THRESHOLD = prev_short
     assert len(captured) <= 1, "Diagnostics rate limit failed"
 
-    # Cooldown after SL
+    # Cooldown after SL blocks signals
     reset_state()
     original_interval = ensure_interval("15m")
     df = build_df(200, "15min")
     ctx = strat.build_signal_context(df)
-    strat.last_sl_time['ETHUSDT'] = strat.now_utc()
+    strat.last_sl_time['ETHUSDT'] = strat.now_utc()  # emulate SL just hit
     sigs, ctx = strat.generate_signals_from_df("ETHUSDT", df)
     restore_interval(original_interval)
     assert sigs.empty and 'cooldown_active' in ctx.get('skip_reasons', []), "Cooldown did not block signal"
@@ -107,6 +112,7 @@ def main():
     original_interval = ensure_interval("15m")
     df_relax = build_df(200, "15min")
     base_ctx = strat.build_signal_context(df_relax)
+
     prev_long = strat.LONG_SCORE_THRESHOLD
     prev_short = strat.SHORT_SCORE_THRESHOLD
     prev_relax_config = (
@@ -119,6 +125,8 @@ def main():
         strat.RELAX_MAX_RELAXED_CANDLES,
     )
     prev_volume_min = strat.VOLUME_MIN_MULT
+
+    # Force relax activation quickly and make it permissive
     strat.RELAX_STRICTNESS_ENABLED = True
     strat.RELAX_AFTER_CANDLES = 1
     strat.RELAX_THRESHOLD_OFFSET = 3
@@ -126,11 +134,14 @@ def main():
     strat.RELAX_ALLOW_SLOPE_MISMATCH = True
     strat.RELAX_RISK_SCALE = 0.5
     strat.RELAX_MAX_RELAXED_CANDLES = 2
-    strat.VOLUME_MIN_MULT = 1.0
+    strat.VOLUME_MIN_MULT = 1.0  # avoid volume gating in synthetic data
     strat.LONG_SCORE_THRESHOLD = base_ctx['long_score'] + 2
     strat.SHORT_SCORE_THRESHOLD = base_ctx['short_score'] + 2
+
+    # One quiet candle (no trade) should enable relax mode
     strat.update_relax_tracker('ETHUSDT', False)
     sigs_relax, ctx_relax = strat.generate_signals_from_df("ETHUSDT", df_relax)
+
     restore_interval(original_interval)
     strat.LONG_SCORE_THRESHOLD = prev_long
     strat.SHORT_SCORE_THRESHOLD = prev_short
@@ -144,6 +155,7 @@ def main():
         strat.RELAX_MAX_RELAXED_CANDLES,
     ) = prev_relax_config
     strat.VOLUME_MIN_MULT = prev_volume_min
+
     assert ctx_relax.get('relax_active'), "Relax mode did not activate"
     assert not sigs_relax.empty, "Relax mode failed to emit a signal"
 
