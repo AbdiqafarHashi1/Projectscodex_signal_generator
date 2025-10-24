@@ -46,6 +46,9 @@ def reset_state():
     strat.last_atr_regime.update({pair: None for pair in strat.PAIRS})
     strat.last_volume_ok.update({pair: None for pair in strat.PAIRS})
     strat.diagnostic_cooldown.update({pair: strat.DIAG_RATE_LIMIT_CANDLES for pair in strat.PAIRS})
+    strat.quiet_candle_streak.update({pair: 0 for pair in strat.PAIRS})
+    strat.relax_active.update({pair: False for pair in strat.PAIRS})
+    strat.relax_candles_remaining.update({pair: 0 for pair in strat.PAIRS})
 
 
 def main():
@@ -98,6 +101,51 @@ def main():
     sigs, ctx = strat.generate_signals_from_df("ETHUSDT", df)
     restore_interval(original_interval)
     assert sigs.empty and 'cooldown_active' in ctx.get('skip_reasons', []), "Cooldown did not block signal"
+
+    # Relax strictness kicks in after quiet streak
+    reset_state()
+    original_interval = ensure_interval("15m")
+    df_relax = build_df(200, "15min")
+    base_ctx = strat.build_signal_context(df_relax)
+    prev_long = strat.LONG_SCORE_THRESHOLD
+    prev_short = strat.SHORT_SCORE_THRESHOLD
+    prev_relax_config = (
+        strat.RELAX_STRICTNESS_ENABLED,
+        strat.RELAX_AFTER_CANDLES,
+        strat.RELAX_THRESHOLD_OFFSET,
+        strat.RELAX_DISABLE_PULLBACK,
+        strat.RELAX_ALLOW_SLOPE_MISMATCH,
+        strat.RELAX_RISK_SCALE,
+        strat.RELAX_MAX_RELAXED_CANDLES,
+    )
+    prev_volume_min = strat.VOLUME_MIN_MULT
+    strat.RELAX_STRICTNESS_ENABLED = True
+    strat.RELAX_AFTER_CANDLES = 1
+    strat.RELAX_THRESHOLD_OFFSET = 3
+    strat.RELAX_DISABLE_PULLBACK = True
+    strat.RELAX_ALLOW_SLOPE_MISMATCH = True
+    strat.RELAX_RISK_SCALE = 0.5
+    strat.RELAX_MAX_RELAXED_CANDLES = 2
+    strat.VOLUME_MIN_MULT = 1.0
+    strat.LONG_SCORE_THRESHOLD = base_ctx['long_score'] + 2
+    strat.SHORT_SCORE_THRESHOLD = base_ctx['short_score'] + 2
+    strat.update_relax_tracker('ETHUSDT', False)
+    sigs_relax, ctx_relax = strat.generate_signals_from_df("ETHUSDT", df_relax)
+    restore_interval(original_interval)
+    strat.LONG_SCORE_THRESHOLD = prev_long
+    strat.SHORT_SCORE_THRESHOLD = prev_short
+    (
+        strat.RELAX_STRICTNESS_ENABLED,
+        strat.RELAX_AFTER_CANDLES,
+        strat.RELAX_THRESHOLD_OFFSET,
+        strat.RELAX_DISABLE_PULLBACK,
+        strat.RELAX_ALLOW_SLOPE_MISMATCH,
+        strat.RELAX_RISK_SCALE,
+        strat.RELAX_MAX_RELAXED_CANDLES,
+    ) = prev_relax_config
+    strat.VOLUME_MIN_MULT = prev_volume_min
+    assert ctx_relax.get('relax_active'), "Relax mode did not activate"
+    assert not sigs_relax.empty, "Relax mode failed to emit a signal"
 
     print("Smoke tests passed")
 

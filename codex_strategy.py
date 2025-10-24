@@ -43,6 +43,14 @@ def load_env_file(path: str = ".env") -> None:
 
 load_env_file()
 
+
+def env_flag(key: str, default: bool = False) -> bool:
+    """Parse boolean-ish environment variables (1/true/yes/on)."""
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    return val.strip().lower() in {"1", "true", "yes", "y", "on"}
+
 # -----------------------
 # CONFIG - tweak these
 # -----------------------
@@ -101,6 +109,15 @@ SESSION_GUARD_HOURS = (0, 6)  # UTC quiet hours window
 SESSION_GUARD_ACTION = os.environ.get("SESSION_GUARD_ACTION", "reduce")
 SESSION_GUARD_RISK_SCALE = float(os.environ.get("SESSION_GUARD_RISK_SCALE", 0.5))
 DIAG_RATE_LIMIT_CANDLES = int(os.environ.get("DIAG_RATE_LIMIT_CANDLES", 4))
+
+# Adaptive strictness relief
+RELAX_STRICTNESS_ENABLED = env_flag("RELAX_STRICTNESS_ENABLED", True)
+RELAX_AFTER_CANDLES = int(os.environ.get("RELAX_AFTER_CANDLES", 12))
+RELAX_THRESHOLD_OFFSET = float(os.environ.get("RELAX_THRESHOLD_OFFSET", 1.0))
+RELAX_DISABLE_PULLBACK = env_flag("RELAX_DISABLE_PULLBACK", True)
+RELAX_ALLOW_SLOPE_MISMATCH = env_flag("RELAX_ALLOW_SLOPE_MISMATCH", False)
+RELAX_RISK_SCALE = float(os.environ.get("RELAX_RISK_SCALE", 0.75))
+RELAX_MAX_RELAXED_CANDLES = int(os.environ.get("RELAX_MAX_RELAXED_CANDLES", 6))
 
 # Stop / TP config
 STOP_METHOD = 'atr'            # 'atr' or 'fixed'
@@ -647,6 +664,9 @@ last_sl_time: Dict[str, Optional[datetime]] = {pair: None for pair in PAIRS}
 last_atr_regime: Dict[str, Optional[str]] = {pair: None for pair in PAIRS}
 last_volume_ok: Dict[str, Optional[bool]] = {pair: None for pair in PAIRS}
 diagnostic_cooldown: Dict[str, int] = {pair: DIAG_RATE_LIMIT_CANDLES for pair in PAIRS}
+quiet_candle_streak: Dict[str, int] = {pair: 0 for pair in PAIRS}
+relax_active: Dict[str, bool] = {pair: False for pair in PAIRS}
+relax_candles_remaining: Dict[str, int] = {pair: 0 for pair in PAIRS}
 
 def calculate_position_size(symbol: str, entry_price: float, stop_loss: float, balance: float, risk_frac: float) -> float:
     distance = abs(entry_price - stop_loss)
@@ -951,6 +971,60 @@ def in_sl_cooldown(pair: str, ts: pd.Timestamp) -> bool:
     return (ts.tz_convert(timezone.utc).to_pydatetime() - last_hit).total_seconds() < COOLDOWN_AFTER_SL_MULT * INTERVAL_SECONDS
 
 
+def relax_adjustments(pair: str) -> Dict[str, Any]:
+    """Return relaxation knobs for the given pair based on recent inactivity."""
+    quiet_candle_streak.setdefault(pair, 0)
+    relax_active.setdefault(pair, False)
+    relax_candles_remaining.setdefault(pair, 0)
+    active = RELAX_STRICTNESS_ENABLED and relax_active.get(pair, False)
+    threshold_delta = RELAX_THRESHOLD_OFFSET if active else 0.0
+    risk_scale = max(0.0, RELAX_RISK_SCALE) if active else 1.0
+    bypass_pullback = active and RELAX_DISABLE_PULLBACK
+    slope_override = active and RELAX_ALLOW_SLOPE_MISMATCH
+    return {
+        'active': active,
+        'threshold_delta': threshold_delta,
+        'risk_scale': risk_scale,
+        'bypass_pullback': bypass_pullback,
+        'slope_override': slope_override,
+    }
+
+
+def update_relax_tracker(pair: str, trade_triggered: bool) -> None:
+    """Track consecutive skipped candles and enable relaxed gating when configured."""
+    if not RELAX_STRICTNESS_ENABLED:
+        return
+
+    quiet_candle_streak.setdefault(pair, 0)
+    relax_active.setdefault(pair, False)
+    relax_candles_remaining.setdefault(pair, 0)
+
+    if trade_triggered:
+        quiet_candle_streak[pair] = 0
+        relax_active[pair] = False
+        relax_candles_remaining[pair] = 0
+        return
+
+    quiet_candle_streak[pair] = quiet_candle_streak.get(pair, 0) + 1
+
+    if relax_active.get(pair, False):
+        if RELAX_MAX_RELAXED_CANDLES > 0:
+            remaining = max(0, relax_candles_remaining.get(pair, 0) - 1)
+            relax_candles_remaining[pair] = remaining
+            if remaining == 0:
+                relax_active[pair] = False
+                log_event(f"[{pair}] Relax mode expired after cooldown window.")
+        return
+
+    if quiet_candle_streak[pair] >= RELAX_AFTER_CANDLES:
+        relax_active[pair] = True
+        relax_candles_remaining[pair] = RELAX_MAX_RELAXED_CANDLES
+        log_event(
+            f"[{pair}] Relax mode enabled after {quiet_candle_streak[pair]} quiet candles (threshold -{RELAX_THRESHOLD_OFFSET},"
+            f" pullback {'off' if RELAX_DISABLE_PULLBACK else 'on'}, risk scale {RELAX_RISK_SCALE:.2f})."
+        )
+
+
 def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Verbose diagnostics: returns same diag_row but also prints the exact checks.
@@ -1038,6 +1112,13 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
             'risk_frac': risk_frac,
             'pos_qty': pos_qty,
             'pullback_ok': ctx['pullback_ok'],
+            'quiet_streak': ctx.get('quiet_streak', 0),
+            'relax_active': ctx.get('relax_active', False),
+            'relax_threshold_offset': ctx.get('relax_threshold_offset', 0.0),
+            'relax_risk_scale': ctx.get('relax_risk_scale', 1.0),
+            'relax_pullback_bypass': ctx.get('relax_pullback_bypass', False),
+            'relax_slope_bypass_long': ctx.get('relax_slope_bypass_long', False),
+            'relax_slope_bypass_short': ctx.get('relax_slope_bypass_short', False),
             'passed': passed,
             'reasons': "; ".join(reasons) if reasons else "OK",
         }
@@ -1053,6 +1134,19 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         print(f"  - Pattern: {ctx['pattern_info']['pattern']} ({ctx['pattern_info']['bias']})")
         print(f"  - Scores -> bull: {ctx['long_score']} bear: {ctx['short_score']}")
         print(f"  - Risk fraction: {risk_frac:.4f}")
+        print(
+            "  - Relax mode:"
+            f" active={ctx.get('relax_active', False)} streak={ctx.get('quiet_streak', 0)}"
+            f" thr_delta={ctx.get('relax_threshold_offset', 0.0)} risk_scale={ctx.get('relax_risk_scale', 1.0):.2f}"
+        )
+        if ctx.get('relax_pullback_bypass'):
+            print("    * Pullback bypassed due to relax mode")
+        if ctx.get('relax_slope_bypass_long') or ctx.get('relax_slope_bypass_short'):
+            print(
+                "    * Slope bypasses:" 
+                f" long={ctx.get('relax_slope_bypass_long', False)}"
+                f" short={ctx.get('relax_slope_bypass_short', False)}"
+            )
         print("  -> Pos qty:", pos_qty)
         print("  -> Passed:", passed)
         print("  -> Reasons:", diag_row['reasons'])
@@ -1188,6 +1282,15 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
     adjusted_risk_short = risk_frac
     skip_reasons: List[str] = []
 
+    relax_info = relax_adjustments(pair)
+    ctx['quiet_streak'] = quiet_candle_streak.get(pair, 0)
+    ctx['relax_active'] = relax_info['active']
+    ctx['relax_threshold_offset'] = relax_info['threshold_delta'] if relax_info['active'] else 0.0
+    ctx['relax_risk_scale'] = relax_info['risk_scale'] if relax_info['active'] else 1.0
+    ctx['relax_pullback_bypass'] = False
+    ctx['relax_slope_bypass_long'] = False
+    ctx['relax_slope_bypass_short'] = False
+
     if ATR_REGIME_SHIFT_ENABLED:
         if ctx['atr_regime'] == 'low':
             long_threshold += ATR_REGIME_LOW_SHIFT
@@ -1195,6 +1298,13 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         elif ctx['atr_regime'] == 'high':
             adjusted_risk_long *= max(0.0, 1 - ATR_REGIME_HIGH_RISK_REDUCTION)
             adjusted_risk_short *= max(0.0, 1 - ATR_REGIME_HIGH_RISK_REDUCTION)
+
+    if relax_info['active'] and relax_info['threshold_delta'] > 0:
+        long_threshold = max(1.0, long_threshold - relax_info['threshold_delta'])
+        short_threshold = max(1.0, short_threshold - relax_info['threshold_delta'])
+    if relax_info['active']:
+        adjusted_risk_long *= relax_info['risk_scale']
+        adjusted_risk_short *= relax_info['risk_scale']
 
     adjusted_risk_long, session_note_long = session_guard_adjust(last.name, adjusted_risk_long)
     adjusted_risk_short, session_note_short = session_guard_adjust(last.name, adjusted_risk_short)
@@ -1205,6 +1315,23 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
 
     cooldown_block = in_sl_cooldown(pair, last.name)
 
+    raw_pullback_ok = ctx['pullback_ok']
+    pullback_gate_ok = raw_pullback_ok or (relax_info['active'] and relax_info['bypass_pullback'])
+    if not raw_pullback_ok and pullback_gate_ok:
+        ctx['relax_pullback_bypass'] = True
+
+    long_slope_ok_raw = slopes_agree(ctx, 'LONG')
+    short_slope_ok_raw = slopes_agree(ctx, 'SHORT')
+    long_slope_ok = long_slope_ok_raw
+    short_slope_ok = short_slope_ok_raw
+    if relax_info['active'] and relax_info['slope_override']:
+        if not long_slope_ok and ctx['structure_bull']:
+            long_slope_ok = True
+            ctx['relax_slope_bypass_long'] = True
+        if not short_slope_ok and ctx['structure_bear']:
+            short_slope_ok = True
+            ctx['relax_slope_bypass_short'] = True
+
     long_ok = (
         ctx['structure_bull']
         and ctx['bull_htf'] > 0
@@ -1213,8 +1340,8 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         and ctx['atr_in_range']
         and ctx['rsi'] >= RSI_LONG_MIN
         and adjusted_risk_long > 0
-        and ctx['pullback_ok']
-        and slopes_agree(ctx, 'LONG')
+        and pullback_gate_ok
+        and long_slope_ok
         and not cooldown_block
     )
 
@@ -1226,8 +1353,8 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         and ctx['atr_in_range']
         and ctx['rsi'] <= RSI_SHORT_MAX
         and adjusted_risk_short > 0
-        and ctx['pullback_ok']
-        and slopes_agree(ctx, 'SHORT')
+        and pullback_gate_ok
+        and short_slope_ok
         and not cooldown_block
     )
 
@@ -1276,11 +1403,11 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
     else:
         if cooldown_block:
             skip_reasons.append('cooldown_active')
-        if not ctx['pullback_ok'] and (ctx['structure_bull'] or ctx['structure_bear']):
+        if not raw_pullback_ok and not pullback_gate_ok and (ctx['structure_bull'] or ctx['structure_bear']):
             skip_reasons.append('pullback_filter')
-        if not slopes_agree(ctx, 'LONG') and ctx['structure_bull']:
+        if not long_slope_ok_raw and not ctx['relax_slope_bypass_long'] and ctx['structure_bull']:
             skip_reasons.append('htf_slope_mismatch_long')
-        if not slopes_agree(ctx, 'SHORT') and ctx['structure_bear']:
+        if not short_slope_ok_raw and not ctx['relax_slope_bypass_short'] and ctx['structure_bear']:
             skip_reasons.append('htf_slope_mismatch_short')
         if adjusted_risk_long <= 0 or adjusted_risk_short <= 0:
             skip_reasons.append('risk_zero')
@@ -1330,6 +1457,7 @@ def main_loop():
                     continue
 
                 # --- Candle closed: diagnose + generate signals ---
+                trade_triggered = False
                 signals_df, ctx = generate_signals_from_df(pair, df)
                 diag = diagnose_candle(pair, df, ctx)
                 if not signals_df.empty:
@@ -1387,6 +1515,7 @@ def main_loop():
                                     'atr_regime': latest_signal.get('atr_regime'),
                                 }
                                 open_simulated_trade(pair, latest_signal['signal'], entry, sl, tp1, tp2, meta)
+                                trade_triggered = True
                                 last_sent_signal_ts[pair] = ts_key
                                 log_event(f"{pair} signal sent and simulated open.")
                         else:
@@ -1399,6 +1528,9 @@ def main_loop():
                         log_event(f"[{pair}] No signals this closed candle. Reasons: {', '.join(sorted(set(reasons)))}")
                     else:
                         log_event(f"[{pair}] No signals this closed candle.")
+
+                if ctx is not None:
+                    update_relax_tracker(pair, trade_triggered)
 
                 # Small delay to avoid rate limit
                 time.sleep(2)

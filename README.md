@@ -20,6 +20,18 @@ The strategy exposes a handful of runtime flags (via `argparse`). Override them 
 * `--cooldown_after_sl_mult` – multiplier applied to the interval when enforcing the post-stop-loss cool-down (default `3`).
 * `--atr_regime_shift` – enable ATR-regime-based threshold and risk adjustments (`True`/`False`).
 
+### Adaptive strictness relief
+
+To reduce the chance of the strategy sitting idle for too long you can enable the relaxed mode tunables (defaults shown):
+
+* `RELAX_STRICTNESS_ENABLED=true` – master switch; set to `false` to disable the feature entirely.
+* `RELAX_AFTER_CANDLES=12` – number of consecutive closed candles without a trade before relax mode engages.
+* `RELAX_THRESHOLD_OFFSET=1.0` – how many score points to subtract from the long/short thresholds while relaxed.
+* `RELAX_DISABLE_PULLBACK=true` – allow trades even if the pullback filter fails once relax mode is active.
+* `RELAX_ALLOW_SLOPE_MISMATCH=false` – if `true`, higher-time-frame slope mismatches are bypassed during relaxation.
+* `RELAX_RISK_SCALE=0.75` – multiplier applied to risk allocation when relaxed (keep lower than `1` to stay conservative).
+* `RELAX_MAX_RELAXED_CANDLES=6` – maximum number of candles to stay relaxed before automatically resetting (use `0` for unlimited).
+
 ### CSV rotation
 
 `open_trades`, `closed_trades`, `diagnostics`, and `account_log` rotate daily. Files are suffixed with the current UTC date (e.g. `closed_trades_2024-03-01.csv`).
