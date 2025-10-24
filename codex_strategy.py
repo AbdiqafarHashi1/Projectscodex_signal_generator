@@ -31,7 +31,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Pairs to monitor (primary pair first)
-PAIRS = ["ETHUSDT" , "BTCUSDT" , "SOLUSDT"]
+PAIRS = ["ETHUSDT", "BTCUSDT", "SOLUSDT"]
 
 # Timeframe for signals
 INTERVAL = os.environ.get("INTERVAL", "15m")
@@ -41,9 +41,9 @@ TZ = "Africa/Nairobi"
 EAT = pytz.timezone(TZ)
 
 # Virtual capital & risk
-STARTING_BALANCE = float(os.environ.get("STARTING_BALANCE", 100000.0))       # USDT starting balance (per account)
+STARTING_BALANCE = float(os.environ.get("STARTING_BALANCE", 100000.0))  # USDT starting balance (per account)
 account_balance = STARTING_BALANCE
-RISK_PER_TRADE = float(os.environ.get("RISK_PER_TRADE", 0.02))          # fraction of balance risked per trade
+RISK_PER_TRADE = float(os.environ.get("RISK_PER_TRADE", 0.02))         # fraction of balance risked per trade
 
 # Strategy tuning
 REQUIRE_1H_AGREEMENT = False
@@ -63,19 +63,23 @@ VOLUME_MIN_MULT = 1.1        # require 10% volume expansion vs 20-period average
 LONG_SCORE_THRESHOLD = 6
 SHORT_SCORE_THRESHOLD = 6
 
-# Regime-aware tuning & guards
+# --- Regime-aware tuning & guards ---
 ATR_REGIME_SHIFT_ENABLED = True
-ATR_REGIME_LOW_SHIFT = 1
-ATR_REGIME_HIGH_RISK_REDUCTION = 0.3
-ENABLE_PULLBACK_FILTER = True
-ENABLE_HTF_SLOPE_ALIGN = True
-HTF_SLOPE_PERIOD = 20
+ATR_REGIME_LOW_SHIFT = 1                 # add 1 point to threshold in low-vol regime
+ATR_REGIME_HIGH_RISK_REDUCTION = 0.3     # cut risk by 30% in high-vol regime
+
+ENABLE_PULLBACK_FILTER = True            # require close within ~0.3% of EMA20
+ENABLE_HTF_SLOPE_ALIGN = True            # 1H/4H EMA slope must agree with direction
+HTF_SLOPE_PERIOD = 20                    # candles for slope calc
+
 ENABLE_SL_COOLDOWN = True
 COOLDOWN_AFTER_SL_MULT = float(os.environ.get("COOLDOWN_AFTER_SL_MULT", 3))
+
 ENABLE_SESSION_GUARD = False
-SESSION_GUARD_HOURS = (0, 6)  # UTC quiet hours window
+SESSION_GUARD_HOURS = (0, 6)             # UTC quiet hours window
 SESSION_GUARD_ACTION = os.environ.get("SESSION_GUARD_ACTION", "reduce")
 SESSION_GUARD_RISK_SCALE = float(os.environ.get("SESSION_GUARD_RISK_SCALE", 0.5))
+
 DIAG_RATE_LIMIT_CANDLES = int(os.environ.get("DIAG_RATE_LIMIT_CANDLES", 4))
 
 # Stop / TP config
@@ -132,7 +136,6 @@ else:
 def now_utc() -> datetime:
     return datetime.now(tz=timezone.utc)
 
-
 def now_local() -> datetime:
     return now_utc().astimezone(EAT)
 
@@ -142,21 +145,17 @@ def ts_to_local_str(ts) -> str:
         t = t.tz_localize('UTC')
     return t.tz_convert(EAT).strftime("%Y-%m-%d %H:%M:%S")
 
-
 def interval_seconds(s: str) -> int:
     unit = s[-1].lower()
     n = int(s[:-1])
-    return n * (60 if unit=='m' else 3600 if unit=='h' else 86400 if unit=='d' else 60)
-
+    return n * (60 if unit == 'm' else 3600 if unit == 'h' else 86400 if unit == 'd' else 60)
 
 INTERVAL_SECONDS = interval_seconds(INTERVAL)
 CYCLE_WAIT_SECONDS = INTERVAL_SECONDS
 
-
 def _backoff_delays():
     for delay in (0.5, 1.0, 2.0):
         yield delay
-
 
 def _with_backoff(func, *args, **kwargs):
     last_err = None
@@ -203,25 +202,22 @@ def ensure_csv_headers(path: str, columns: List[str]):
     except Exception as e:
         print("CSV init error:", e)
 
-
 def append_csv(path: str, row: Dict[str, Any], columns: Optional[List[str]] = None):
     if not row:
         return
-
     df_row = pd.DataFrame([row])
     if columns is not None:
         missing = [c for c in columns if c not in df_row.columns]
         for col in missing:
             df_row[col] = np.nan
         df_row = df_row[columns]
-
     try:
         with open(path, 'a', encoding='utf-8') as f:
-            df_row.to_csv(f, header=f.tell()==0, index=False)
+            df_row.to_csv(f, header=f.tell() == 0, index=False)
     except Exception as e:
         print("CSV write error:", e)
 
-
+# ---- Daily-rotated CSVs ----
 CSV_DEFINITIONS = {
     'open_trades': {
         'base': OPEN_TRADES_CSV,
@@ -244,13 +240,11 @@ CSV_DEFINITIONS = {
 CURRENT_CSV_DATE = None
 CSV_PATHS: Dict[str, str] = {}
 
-
 def _daily_csv_name(base: str, date_str: str) -> str:
     root, ext = os.path.splitext(base)
     if not ext:
         ext = '.csv'
     return f"{root}_{date_str}{ext}"
-
 
 def ensure_daily_csvs():
     global CURRENT_CSV_DATE, CSV_PATHS
@@ -264,14 +258,12 @@ def ensure_daily_csvs():
         CSV_PATHS[name] = path
         ensure_csv_headers(path, cfg['columns'])
 
-
 def append_named_csv(name: str, row: Dict[str, Any]):
     ensure_daily_csvs()
     path = CSV_PATHS.get(name)
     if not path:
         return
     append_csv(path, row, CSV_DEFINITIONS[name]['columns'])
-
 
 def compute_dynamic_risk_frac(atr_pct: float) -> float:
     """Return a risk fraction adjustment based on volatility."""
@@ -294,7 +286,6 @@ def compute_dynamic_risk_frac(atr_pct: float) -> float:
     elif atr_pct_val > ATR_PCT_RISK_MED:
         risk *= 0.75
     return risk
-
 
 def log_event(msg: str):
     ts = now_local().strftime("%Y-%m-%d %H:%M:%S")
@@ -330,13 +321,14 @@ def atr(df: pd.DataFrame, period: int = 14):
     return tr.rolling(period, min_periods=1).mean()
 
 def resample_tf(df_small: pd.DataFrame, rule: str) -> pd.DataFrame:
+    # Expect uppercase rules like '1H', '4H'
     rule = rule.upper()
-    pandas_rule = rule.replace('H', 'h')
-    o = df_small['open'].resample(pandas_rule).first()
-    h = df_small['high'].resample(pandas_rule).max()
-    l = df_small['low'].resample(pandas_rule).min()
-    c = df_small['close'].resample(pandas_rule).last()
-    v = df_small['volume'].resample(pandas_rule).sum()
+    df_small = df_small.sort_index()
+    o = df_small['open'].resample(rule).first()
+    h = df_small['high'].resample(rule).max()
+    l = df_small['low'].resample(rule).min()
+    c = df_small['close'].resample(rule).last()
+    v = df_small['volume'].resample(rule).sum()
     res = pd.DataFrame({'open': o, 'high': h, 'low': l, 'close': c, 'volume': v})
     return res.dropna()
 
@@ -395,7 +387,6 @@ def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str,
         }
     }
 
-
 def higher_tf_trend(df: pd.DataFrame, rule: str) -> Optional[bool]:
     """Determine if the higher timeframe trend is bullish (True), bearish (False) or unknown (None)."""
     try:
@@ -410,7 +401,6 @@ def higher_tf_trend(df: pd.DataFrame, rule: str) -> Optional[bool]:
         return bool(latest['ema20'] > latest['ema50'])
     except Exception:
         return None
-
 
 def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
     """Compute reusable context for diagnostics and signal evaluation."""
@@ -431,6 +421,7 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
 
     atr_series = atr(df, 14)
     atr_val = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+
     atr_pct_series = atr_series / df['close']
     atr_pct = float(atr_pct_series.iloc[-1]) if len(atr_series) else 0.0
     clean_atr = atr_pct_series.dropna()
@@ -471,41 +462,30 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
     long_score = 0
     short_score = 0
 
-    if structure_bull:
-        long_score += 1
-    if structure_bear:
-        short_score += 1
-    if crossed_up:
-        long_score += 1
-    if crossed_down:
-        short_score += 1
-    if momentum_bull:
-        long_score += 1
-    if momentum_bear:
-        short_score += 1
-    if pattern_info['bias'] == 'bullish':
-        long_score += 1
-    if pattern_info['bias'] == 'bearish':
-        short_score += 1
-    if rsi_last >= RSI_LONG_MIN:
-        long_score += 1
-    if rsi_last <= RSI_SHORT_MAX:
-        short_score += 1
+    if structure_bull: long_score += 1
+    if structure_bear: short_score += 1
+    if crossed_up:     long_score += 1
+    if crossed_down:   short_score += 1
+    if momentum_bull:  long_score += 1
+    if momentum_bear:  short_score += 1
+    if pattern_info['bias'] == 'bullish': long_score += 1
+    if pattern_info['bias'] == 'bearish': short_score += 1
+    if rsi_last >= RSI_LONG_MIN: long_score += 1
+    if rsi_last <= RSI_SHORT_MAX: short_score += 1
     if volume_ok:
         long_score += 1
         short_score += 1
     if atr_in_range:
         long_score += 1
         short_score += 1
-    if ema_slope > EMA_SLOPE_MIN:
-        long_score += 1
-    if ema_slope < -EMA_SLOPE_MIN:
-        short_score += 1
+    if ema_slope > EMA_SLOPE_MIN:  long_score += 1
+    if ema_slope < -EMA_SLOPE_MIN: short_score += 1
     long_score += bull_htf
     short_score += bear_htf
 
     risk_frac = compute_dynamic_risk_frac(atr_pct)
 
+    # HTF slopes + pullback filter
     htf_slopes = {}
     for tf in ['1H', '4H']:
         res = resample_tf(df, tf)
@@ -567,7 +547,6 @@ def get_klines_df(symbol: str, interval: str = INTERVAL, limit: int = 500) -> pd
         if client is not None:
             def _fetch():
                 return client.get_klines(symbol=symbol, interval=interval, limit=limit)
-
             klines = _with_backoff(_fetch)
         else:
             def _fetch():
@@ -575,7 +554,6 @@ def get_klines_df(symbol: str, interval: str = INTERVAL, limit: int = 500) -> pd
                 r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=10)
                 r.raise_for_status()
                 return r.json()
-
             klines = _with_backoff(_fetch)
         df = pd.DataFrame(klines, columns=[
             'open_time','open','high','low','close','volume','close_time','quote_asset_volume','num_trades','taker_buy_base','taker_buy_quote','ignore'
@@ -591,21 +569,18 @@ def get_klines_df(symbol: str, interval: str = INTERVAL, limit: int = 500) -> pd
         log_event(f"get_klines_df error for {symbol}: {e}")
         raise
 
-
 def get_current_price(symbol: str) -> float:
     try:
         if client is not None:
             def _fetch():
                 t = client.get_symbol_ticker(symbol=symbol)
                 return float(t['price'])
-
             return _with_backoff(_fetch)
         else:
             def _fetch():
                 r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol}, timeout=10)
                 r.raise_for_status()
                 return float(r.json()['price'])
-
             return _with_backoff(_fetch)
     except Exception as e:
         log_event(f"get_current_price error {symbol}: {e}")
@@ -634,7 +609,6 @@ def calculate_position_size(symbol: str, entry_price: float, stop_loss: float, b
     factor = 10 ** precision
     return float(math.floor(qty * factor) / factor)
 
-
 def apply_precision(symbol: str, qty: float) -> float:
     precision = SYMBOL_PRECISION.get(symbol, 3)
     factor = 10 ** precision
@@ -644,7 +618,7 @@ def open_simulated_trade(pair: str, signal: str, entry: float, sl: float, tp1: f
     global account_balance
     ts_key = f"{pair}_{entry}_{now_utc().isoformat()}"
     # concurrency protection
-    count_open = sum(1 for t in open_trades.values() if t['pair']==pair)
+    count_open = sum(1 for t in open_trades.values() if t['pair'] == pair)
     if count_open >= MAX_CONCURRENT_TRADES_PER_SYMBOL:
         send_telegram(f"⚠️ Skipping open for {pair}: {count_open} open trades already.")
         log_event(f"Skip open {pair}: concurrency")
@@ -777,7 +751,7 @@ def partial_close_trade(trade_id: str, fraction: float, close_price: float, labe
         'notional': trade['notional'] * proportion,
         'est_fees': trade['est_fees'] * proportion,
         'created_at': trade['created_at'],
-        'closed_at': datetime.now(tz=pytz.utc).isoformat(),
+        'closed_at': now_utc().isoformat(),
         'result': label,
         'close_price': close_price,
         'gross_pnl': gross,
@@ -825,7 +799,6 @@ def check_trades_and_notify(pair: str, current_price: float):
                 messages.append(f"❌ SL HIT {pair} @ {current_price:.2f}")
                 close_simulated_trade(tid, 'SL', current_price)
             else:
-                # progress notifications
                 if not trade['tp1_hit'] and (tp1 - current_price) / tp1 <= 0.005:
                     messages.append(f"📈 {pair} price approaching TP1 ({tp1:.2f}) price {current_price:.2f}")
                 if (current_price - sl) / sl <= 0.004:
@@ -863,7 +836,6 @@ def check_trades_and_notify(pair: str, current_price: float):
 def mark_diag_event(pair: str):
     diagnostic_cooldown[pair] = DIAG_RATE_LIMIT_CANDLES
 
-
 def should_send_diag(pair: str, ctx: Dict[str, Any], passed: bool, close_score: Optional[int], threshold: int) -> bool:
     atr_regime = ctx.get('atr_regime')
     volume_ok = ctx.get('volume_ok')
@@ -882,7 +854,6 @@ def should_send_diag(pair: str, ctx: Dict[str, Any], passed: bool, close_score: 
     diagnostic_cooldown[pair] = 0
     return True
 
-
 def session_guard_adjust(ts: pd.Timestamp, risk_frac: float) -> Tuple[float, Optional[str]]:
     if not ENABLE_SESSION_GUARD:
         return risk_frac, None
@@ -898,7 +869,6 @@ def session_guard_adjust(ts: pd.Timestamp, risk_frac: float) -> Tuple[float, Opt
         return risk_frac * SESSION_GUARD_RISK_SCALE, 'session_guard_reduce'
     return risk_frac, None
 
-
 def slopes_agree(ctx: Dict[str, Any], direction: str) -> bool:
     if not ENABLE_HTF_SLOPE_ALIGN:
         return True
@@ -913,7 +883,6 @@ def slopes_agree(ctx: Dict[str, Any], direction: str) -> bool:
             return False
     return True
 
-
 def in_sl_cooldown(pair: str, ts: pd.Timestamp) -> bool:
     if not ENABLE_SL_COOLDOWN:
         return False
@@ -925,7 +894,6 @@ def in_sl_cooldown(pair: str, ts: pd.Timestamp) -> bool:
     if ts.tzinfo is None:
         ts = ts.tz_localize('UTC')
     return (ts.tz_convert(timezone.utc).to_pydatetime() - last_hit).total_seconds() < COOLDOWN_AFTER_SL_MULT * INTERVAL_SECONDS
-
 
 def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
@@ -976,6 +944,7 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         else:
             simulated_sl = 0
         pos_qty = calculate_position_size(pair, last_row['close'], simulated_sl, account_balance, risk_frac) if risk_frac > 0 and simulated_sl and simulated_sl != last_row['close'] else 0.0
+
         if pos_qty <= 0:
             reasons.append("Position size 0 (vol filter / stop too tight / balance small)")
 
@@ -1019,7 +988,7 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         }
         append_named_csv('diagnostics', diag_row)
 
-        # PRINT full verbose diagnostics to console (immediately visible)
+        # PRINT full verbose diagnostics to console
         print("\n--- VERBOSE DIAGNOSTICS ---")
         print(f"Time (UTC): {last_ts}  Price: {last_row['close']:.2f}")
         print(f"  - Structure bull: {ctx['structure_bull']}  bear: {ctx['structure_bear']}")
@@ -1034,7 +1003,7 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         print("  -> Reasons:", diag_row['reasons'])
         print("--- end diag ---\n")
 
-        # send to telegram (brief) only if configured or if near pass
+        # Brief Telegram DIAG only when rate-limited criteria meet
         close_score = None
         threshold = LONG_SCORE_THRESHOLD
         if ctx['structure_bull']:
@@ -1060,9 +1029,6 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         log_event(f"diagnose_candle error: {e}")
         return {}
 
-# -----------------------
-# Signal generator (multi-TF) -> returns DataFrame of signals
-# -----------------------
 # === Signal Generation & Diagnostics ===
 def check_signal(symbol, df):
     try:
@@ -1119,7 +1085,6 @@ def send_periodic_summary():
     except Exception as e:
         log_event(f"send_periodic_summary error: {e}")
 
-
 def parse_bool(value: str) -> bool:
     if isinstance(value, bool):
         return value
@@ -1130,7 +1095,6 @@ def parse_bool(value: str) -> bool:
         return False
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Codex strategy options")
     parser.add_argument("--diag_rate_limit_candles", type=int, default=DIAG_RATE_LIMIT_CANDLES)
@@ -1139,9 +1103,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--atr_regime_shift", type=parse_bool, default=ATR_REGIME_SHIFT_ENABLED)
     return parser.parse_args()
 
-# -----------------------
-# Main loop
-# -----------------------
 # -----------------------
 # MAIN LOOP
 # -----------------------
@@ -1174,10 +1135,8 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
 
     adjusted_risk_long, session_note_long = session_guard_adjust(last.name, adjusted_risk_long)
     adjusted_risk_short, session_note_short = session_guard_adjust(last.name, adjusted_risk_short)
-    if session_note_long:
-        skip_reasons.append(session_note_long)
-    if session_note_short and session_note_short not in skip_reasons:
-        skip_reasons.append(session_note_short)
+    if session_note_long:  skip_reasons.append(session_note_long)
+    if session_note_short and session_note_short not in skip_reasons:  skip_reasons.append(session_note_short)
 
     cooldown_block = in_sl_cooldown(pair, last.name)
 
@@ -1250,20 +1209,13 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
             'atr_regime': ctx['atr_regime'],
         })
     else:
-        if cooldown_block:
-            skip_reasons.append('cooldown_active')
-        if not ctx['pullback_ok'] and (ctx['structure_bull'] or ctx['structure_bear']):
-            skip_reasons.append('pullback_filter')
-        if not slopes_agree(ctx, 'LONG') and ctx['structure_bull']:
-            skip_reasons.append('htf_slope_mismatch_long')
-        if not slopes_agree(ctx, 'SHORT') and ctx['structure_bear']:
-            skip_reasons.append('htf_slope_mismatch_short')
-        if adjusted_risk_long <= 0 or adjusted_risk_short <= 0:
-            skip_reasons.append('risk_zero')
-        if ctx['atr_regime'] == 'low':
-            skip_reasons.append('atr_regime_low')
-        if ctx['atr_regime'] == 'high':
-            skip_reasons.append('atr_regime_high')
+        if cooldown_block: skip_reasons.append('cooldown_active')
+        if not ctx['pullback_ok'] and (ctx['structure_bull'] or ctx['structure_bear']): skip_reasons.append('pullback_filter')
+        if not slopes_agree(ctx, 'LONG') and ctx['structure_bull']:  skip_reasons.append('htf_slope_mismatch_long')
+        if not slopes_agree(ctx, 'SHORT') and ctx['structure_bear']: skip_reasons.append('htf_slope_mismatch_short')
+        if adjusted_risk_long <= 0 or adjusted_risk_short <= 0:       skip_reasons.append('risk_zero')
+        if ctx['atr_regime'] == 'low':  skip_reasons.append('atr_regime_low')
+        if ctx['atr_regime'] == 'high': skip_reasons.append('atr_regime_high')
 
     ctx['long_threshold'] = long_threshold
     ctx['short_threshold'] = short_threshold
@@ -1337,17 +1289,12 @@ def main_loop():
                                     f"\nQty(sim): {qty:.6f}"
                                     f"\nPattern: {pattern} ({pattern_bias})"
                                 )
-                                if rsi_val is not None and not math.isnan(rsi_val):
-                                    msg += f"\nRSI: {rsi_val:.2f}"
-                                if score is not None and isinstance(score, (int, float)):
-                                    msg += f"\nScore: {int(round(float(score)))}"
-                                if atr_pct is not None and isinstance(atr_pct, (int, float)) and not math.isnan(float(atr_pct)):
-                                    msg += f"\nATR%: {float(atr_pct):.4f}"
-                                if volume_ratio is not None and isinstance(volume_ratio, (int, float)) and not math.isnan(float(volume_ratio)):
-                                    msg += f"\nVolRatio: {float(volume_ratio):.2f}"
+                                if rsi_val is not None and not math.isnan(rsi_val): msg += f"\nRSI: {rsi_val:.2f}"
+                                if score is not None and isinstance(score, (int, float)): msg += f"\nScore: {int(round(float(score)))}"
+                                if atr_pct is not None and isinstance(atr_pct, (int, float)) and not math.isnan(float(atr_pct)): msg += f"\nATR%: {float(atr_pct):.4f}"
+                                if volume_ratio is not None and isinstance(volume_ratio, (int, float)) and not math.isnan(float(volume_ratio)): msg += f"\nVolRatio: {float(volume_ratio):.2f}"
                                 htf_conf = latest_signal.get('htf_confluence')
-                                if htf_conf is not None:
-                                    msg += f"\nHTF confluence: {htf_conf}"
+                                if htf_conf is not None: msg += f"\nHTF confluence: {htf_conf}"
                                 msg += f"\nRisk: {risk_frac * 100:.2f}% of balance"
                                 msg += f"\nTime(candle close): {ts_to_local_str(latest_signal['timestamp'])}"
                                 send_telegram(msg)
@@ -1364,7 +1311,6 @@ def main_loop():
                                 }
                                 open_simulated_trade(pair, latest_signal['signal'], entry, sl, tp1, tp2, meta)
                                 last_sent_signal_ts[pair] = ts_key
-                                log_event(f"{pair} signal sent and simulated open.")
                         else:
                             log_event(f"{pair} No new closed-candle signal (already sent for this candle).")
                 else:
@@ -1401,7 +1347,6 @@ def main_loop():
                 pass
             time.sleep(15)
 
-
 if __name__ == "__main__":
     args = parse_args()
     DIAG_RATE_LIMIT_CANDLES = max(1, args.diag_rate_limit_candles)
@@ -1410,4 +1355,3 @@ if __name__ == "__main__":
     COOLDOWN_AFTER_SL_MULT = float(args.cooldown_after_sl_mult)
     ATR_REGIME_SHIFT_ENABLED = bool(args.atr_regime_shift)
     main_loop()
-
