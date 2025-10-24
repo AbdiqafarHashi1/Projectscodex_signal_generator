@@ -8,7 +8,7 @@ import time
 import math
 import os
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import pytz
 import requests
 import pandas as pd
@@ -26,9 +26,9 @@ except Exception:
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET", "")
 
-# Telegram (required to receive alerts)
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8421566316:AAHEc8RsvjPZTXS9BIYbQ5__n92MLTiut68")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "6055044818")
+# Telegram (required to receive alerts) — supply via environment
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Pairs to monitor (primary pair first)
 PAIRS = ["ETHUSDT", "BTCUSDT", "SOLUSDT"]
@@ -67,19 +67,15 @@ SHORT_SCORE_THRESHOLD = 6
 ATR_REGIME_SHIFT_ENABLED = True
 ATR_REGIME_LOW_SHIFT = 1                 # add 1 point to threshold in low-vol regime
 ATR_REGIME_HIGH_RISK_REDUCTION = 0.3     # cut risk by 30% in high-vol regime
-
 ENABLE_PULLBACK_FILTER = True            # require close within ~0.3% of EMA20
 ENABLE_HTF_SLOPE_ALIGN = True            # 1H/4H EMA slope must agree with direction
 HTF_SLOPE_PERIOD = 20                    # candles for slope calc
-
 ENABLE_SL_COOLDOWN = True
 COOLDOWN_AFTER_SL_MULT = float(os.environ.get("COOLDOWN_AFTER_SL_MULT", 3))
-
 ENABLE_SESSION_GUARD = False
 SESSION_GUARD_HOURS = (0, 6)             # UTC quiet hours window
 SESSION_GUARD_ACTION = os.environ.get("SESSION_GUARD_ACTION", "reduce")
 SESSION_GUARD_RISK_SCALE = float(os.environ.get("SESSION_GUARD_RISK_SCALE", 0.5))
-
 DIAG_RATE_LIMIT_CANDLES = int(os.environ.get("DIAG_RATE_LIMIT_CANDLES", 4))
 
 # Stop / TP config
@@ -236,7 +232,6 @@ CSV_DEFINITIONS = {
         'columns': ['ts','balance','net_pnl']
     }
 }
-
 CURRENT_CSV_DATE = None
 CSV_PATHS: Dict[str, str] = {}
 
@@ -279,7 +274,6 @@ def compute_dynamic_risk_frac(atr_pct: float) -> float:
         return 0.0
     if atr_pct_val > ATR_PCT_MAX:
         return 0.0
-
     risk = RISK_PER_TRADE
     if atr_pct_val > ATR_PCT_RISK_HIGH:
         risk *= 0.5
@@ -298,7 +292,7 @@ def log_event(msg: str):
         pass
 
 # -----------------------
-# Indicators / strategy functions
+# Indicators / strategy
 # -----------------------
 def ema(series: pd.Series, period: int):
     return series.ewm(span=period, adjust=False).mean()
@@ -333,7 +327,6 @@ def resample_tf(df_small: pd.DataFrame, rule: str) -> pd.DataFrame:
     return res.dropna()
 
 def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str, Any]:
-    """Return candlestick pattern insights for the last two candles."""
     pattern = None
     bias = 'neutral'
     prev_open, prev_close = prev['open'], prev['close']
@@ -341,14 +334,9 @@ def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str,
     prev_high, prev_low = prev['high'], prev['low']
     cur_high, cur_low = current['high'], current['low']
 
-    def body(o, c):
-        return abs(c - o)
-
-    def upper_shadow(o, c, h):
-        return h - max(o, c)
-
-    def lower_shadow(o, c, l):
-        return min(o, c) - l
+    def body(o, c): return abs(c - o)
+    def upper_shadow(o, c, h): return h - max(o, c)
+    def lower_shadow(o, c, l): return min(o, c) - l
 
     prev_body = body(prev_open, prev_close)
     curr_body = body(cur_open, cur_close)
@@ -357,38 +345,25 @@ def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str,
     curr_upper = upper_shadow(cur_open, cur_close, cur_high)
     curr_lower = lower_shadow(cur_open, cur_close, cur_low)
 
-    # Bullish patterns
+    # Bullish
     if prev_close < prev_open and cur_close > cur_open:
         if cur_close >= prev_open and cur_open <= prev_close and curr_body > prev_body:
-            pattern = 'bullish_engulfing'
-            bias = 'bullish'
+            pattern = 'bullish_engulfing'; bias = 'bullish'
     if bias == 'neutral' and cur_close > cur_open:
         if curr_lower >= 2 * curr_body and curr_upper <= curr_body * 0.5:
-            pattern = 'bullish_hammer'
-            bias = 'bullish'
+            pattern = 'bullish_hammer'; bias = 'bullish'
 
-    # Bearish patterns
+    # Bearish
     if prev_close > prev_open and cur_close < cur_open:
         if cur_open >= prev_close and cur_close <= prev_open and curr_body > prev_body:
-            pattern = 'bearish_engulfing'
-            bias = 'bearish'
+            pattern = 'bearish_engulfing'; bias = 'bearish'
     if bias == 'neutral' and cur_close < cur_open:
         if curr_upper >= 2 * curr_body and curr_lower <= curr_body * 0.5:
-            pattern = 'bearish_shooting_star'
-            bias = 'bearish'
+            pattern = 'bearish_shooting_star'; bias = 'bearish'
 
-    return {
-        'pattern': pattern,
-        'bias': bias,
-        'details': {
-            'curr_body': curr_body,
-            'curr_upper': curr_upper,
-            'curr_lower': curr_lower
-        }
-    }
+    return {'pattern': pattern, 'bias': bias, 'details': {'curr_body': curr_body, 'curr_upper': curr_upper, 'curr_lower': curr_lower}}
 
 def higher_tf_trend(df: pd.DataFrame, rule: str) -> Optional[bool]:
-    """Determine if the higher timeframe trend is bullish (True), bearish (False) or unknown (None)."""
     try:
         res = resample_tf(df, rule)
         if res.empty:
@@ -403,7 +378,6 @@ def higher_tf_trend(df: pd.DataFrame, rule: str) -> Optional[bool]:
         return None
 
 def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
-    """Compute reusable context for diagnostics and signal evaluation."""
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -421,19 +395,15 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
 
     atr_series = atr(df, 14)
     atr_val = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
-
     atr_pct_series = atr_series / df['close']
     atr_pct = float(atr_pct_series.iloc[-1]) if len(atr_series) else 0.0
     clean_atr = atr_pct_series.dropna()
     atr_low = float(np.nanpercentile(clean_atr, 33)) if len(clean_atr) else float('nan')
     atr_high = float(np.nanpercentile(clean_atr, 66)) if len(clean_atr) else float('nan')
     if len(clean_atr):
-        if atr_pct <= atr_low:
-            atr_regime = 'low'
-        elif atr_pct >= atr_high:
-            atr_regime = 'high'
-        else:
-            atr_regime = 'mid'
+        if atr_pct <= atr_low: atr_regime = 'low'
+        elif atr_pct >= atr_high: atr_regime = 'high'
+        else: atr_regime = 'mid'
     else:
         atr_regime = 'mid'
 
@@ -442,7 +412,7 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
     volume_ratio = (vol_last / vol_ma20) if vol_ma20 else 0.0
     volume_ok = volume_ratio >= VOLUME_MIN_MULT
 
-    pattern_info = detect_candlestick_pattern(prev, last)
+    pattern_info = detect_candlestick_pattern(df.iloc[-2], df.iloc[-1])
 
     crossed_up = ema_diff_prev < 0 and ema_diff_last > 0
     crossed_down = ema_diff_prev > 0 and ema_diff_last < 0
@@ -461,7 +431,6 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
 
     long_score = 0
     short_score = 0
-
     if structure_bull: long_score += 1
     if structure_bear: short_score += 1
     if crossed_up:     long_score += 1
@@ -473,11 +442,9 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
     if rsi_last >= RSI_LONG_MIN: long_score += 1
     if rsi_last <= RSI_SHORT_MAX: short_score += 1
     if volume_ok:
-        long_score += 1
-        short_score += 1
+        long_score += 1; short_score += 1
     if atr_in_range:
-        long_score += 1
-        short_score += 1
+        long_score += 1; short_score += 1
     if ema_slope > EMA_SLOPE_MIN:  long_score += 1
     if ema_slope < -EMA_SLOPE_MIN: short_score += 1
     long_score += bull_htf
@@ -502,47 +469,30 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
         pullback_ok = pullback <= 0.003
 
     return {
-        'ema20': ema20,
-        'ema50': ema50,
-        'ema_diff_last': ema_diff_last,
-        'ema_diff_prev': ema_diff_prev,
-        'ema_slope': ema_slope,
-        'rsi': rsi_last,
-        'atr': atr_val,
-        'atr_pct': atr_pct,
-        'atr_low': atr_low,
-        'atr_high': atr_high,
-        'atr_regime': atr_regime,
+        'ema20': ema20, 'ema50': ema50,
+        'ema_diff_last': ema_diff_last, 'ema_diff_prev': ema_diff_prev,
+        'ema_slope': ema_slope, 'rsi': rsi_last,
+        'atr': atr_val, 'atr_pct': atr_pct,
+        'atr_low': atr_low, 'atr_high': atr_high, 'atr_regime': atr_regime,
         'atr_in_range': atr_in_range,
-        'volume': vol_last,
-        'volume_ma20': vol_ma20,
-        'volume_ratio': volume_ratio,
-        'volume_ok': volume_ok,
+        'volume': vol_last, 'volume_ma20': vol_ma20,
+        'volume_ratio': volume_ratio, 'volume_ok': volume_ok,
         'pattern_info': pattern_info,
-        'crossed_up': crossed_up,
-        'crossed_down': crossed_down,
-        'momentum_bull': momentum_bull,
-        'momentum_bear': momentum_bear,
-        'bias_1h': bias_1h,
-        'bias_4h': bias_4h,
-        'bull_htf': bull_htf,
-        'bear_htf': bear_htf,
-        'structure_bull': structure_bull,
-        'structure_bear': structure_bear,
-        'long_score': long_score,
-        'short_score': short_score,
+        'crossed_up': crossed_up, 'crossed_down': crossed_down,
+        'momentum_bull': momentum_bull, 'momentum_bear': momentum_bear,
+        'bias_1h': bias_1h, 'bias_4h': bias_4h,
+        'bull_htf': bull_htf, 'bear_htf': bear_htf,
+        'structure_bull': structure_bull, 'structure_bear': structure_bear,
+        'long_score': long_score, 'short_score': short_score,
         'risk_frac': risk_frac,
-        'htf_slopes': htf_slopes,
-        'pullback_ok': pullback_ok,
-        'last': last,
-        'prev': prev
+        'htf_slopes': htf_slopes, 'pullback_ok': pullback_ok,
+        'last': last, 'prev': prev
     }
 
 # -----------------------
 # Live data helpers
 # -----------------------
 def get_klines_df(symbol: str, interval: str = INTERVAL, limit: int = 500) -> pd.DataFrame:
-    # prefer python-binance client if available; otherwise public REST
     try:
         if client is not None:
             def _fetch():
@@ -631,27 +581,15 @@ def open_simulated_trade(pair: str, signal: str, entry: float, sl: float, tp1: f
     notional = qty * entry
     est_fees = notional * FEE_RATE
     trade = {
-        'id': ts_key,
-        'pair': pair,
-        'signal': signal,
-        'entry': entry,
-        'sl': sl,
-        'tp1': tp1,
-        'tp2': tp2,
-        'qty': qty,
-        'initial_qty': qty,
-        'remaining_qty': qty,
-        'notional': notional,
-        'est_fees': est_fees,
-        'created_at': now_utc().isoformat(),
-        'tp1_hit': False,
-        'status': 'OPEN',
-        'sl_to_entry': False,
-        'realized_pnl': 0.0,
+        'id': ts_key, 'pair': pair, 'signal': signal,
+        'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2,
+        'qty': qty, 'initial_qty': qty, 'remaining_qty': qty,
+        'notional': notional, 'est_fees': est_fees,
+        'created_at': now_utc().isoformat(), 'tp1_hit': False,
+        'status': 'OPEN', 'sl_to_entry': False, 'realized_pnl': 0.0,
         'risk_frac': risk_frac
     }
-    if meta:
-        trade.update(meta)
+    if meta: trade.update(meta)
     open_trades[ts_key] = trade
     mark_diag_event(pair)
     append_named_csv('open_trades', trade)
@@ -666,16 +604,10 @@ def open_simulated_trade(pair: str, signal: str, entry: float, sl: float, tp1: f
         and vol_ratio is not None and isinstance(vol_ratio, (int, float)) and not math.isnan(float(vol_ratio))
     ):
         score_display = score if score is not None else 'n/a'
-        if isinstance(score_display, float):
-            score_display = int(round(score_display))
-        htf_conf = trade.get('htf_confluence')
-        htf_display = htf_conf if htf_conf is not None else 'n/a'
-        stats_line = (
-            f"\nScore: {score_display} | HTF conf: {htf_display} | Risk: {risk_pct:.2f}% | ATR%: {float(atr_pct):.3f} | VolRatio: {float(vol_ratio):.2f}"
-        )
-    send_telegram(
-        f"📥 OPEN_SIM {pair} {signal} qty {qty:.6f} @ {entry:.2f} SL {sl:.2f} TP1 {tp1:.2f} TP2 {tp2:.2f}{pattern_note}" + stats_line
-    )
+        if isinstance(score_display, float): score_display = int(round(score_display))
+        htf_conf = trade.get('htf_confluence'); htf_display = htf_conf if htf_conf is not None else 'n/a'
+        stats_line = f"\nScore: {score_display} | HTF conf: {htf_display} | Risk: {risk_pct:.2f}% | ATR%: {float(atr_pct):.3f} | VolRatio: {float(vol_ratio):.2f}"
+    send_telegram(f"📥 OPEN_SIM {pair} {signal} qty {qty:.6f} @ {entry:.2f} SL {sl:.2f} TP1 {tp1:.2f} TP2 {tp2:.2f}{pattern_note}" + stats_line)
     log_event(f"Opened {pair} {signal} qty {qty:.6f} @ {entry:.2f}")
     return trade
 
@@ -716,7 +648,6 @@ def close_simulated_trade(trade_id: str, result: str, close_price: float):
     return closed
 
 def partial_close_trade(trade_id: str, fraction: float, close_price: float, label: str) -> Optional[Dict[str, Any]]:
-    """Close part of an open trade, updating balance and sending alerts."""
     global account_balance
     trade = open_trades.get(trade_id)
     if not trade:
@@ -729,8 +660,7 @@ def partial_close_trade(trade_id: str, fraction: float, close_price: float, labe
     qty_to_close = apply_precision(trade['pair'], qty_to_close)
     if qty_to_close <= 0:
         return None
-    entry = trade['entry']
-    signal = trade['signal']
+    entry = trade['entry']; signal = trade['signal']
     gross = (close_price - entry) * qty_to_close if signal == 'LONG' else (entry - close_price) * qty_to_close
     fees = entry * qty_to_close * FEE_RATE
     net = gross - fees
@@ -791,8 +721,7 @@ def check_trades_and_notify(pair: str, current_price: float):
                 if TP_STYLE == 'two' and TP1_SPLIT > 0:
                     partial_close_trade(tid, TP1_SPLIT, current_price, 'TP1')
                 if not trade.get('sl_to_entry'):
-                    trade['sl'] = entry
-                    trade['sl_to_entry'] = True
+                    trade['sl'] = entry; trade['sl_to_entry'] = True
                     send_telegram(f"🔒 Moved SL to entry for {pair} after TP1. New SL {entry:.2f}")
                     log_event(f"{pair} SL moved to entry after TP1")
             elif current_price <= sl:
@@ -813,8 +742,7 @@ def check_trades_and_notify(pair: str, current_price: float):
                 if TP_STYLE == 'two' and TP1_SPLIT > 0:
                     partial_close_trade(tid, TP1_SPLIT, current_price, 'TP1')
                 if not trade.get('sl_to_entry'):
-                    trade['sl'] = entry
-                    trade['sl_to_entry'] = True
+                    trade['sl'] = entry; trade['sl_to_entry'] = True
                     send_telegram(f"🔒 Moved SL to entry for {pair} after TP1. New SL {entry:.2f}")
                     log_event(f"{pair} SL moved to entry after TP1")
             elif current_price >= sl:
@@ -826,8 +754,7 @@ def check_trades_and_notify(pair: str, current_price: float):
                 if (sl - current_price) / sl <= 0.004:
                     messages.append(f"⚠️ {pair} price approaching SL ({sl:.2f}) price {current_price:.2f}")
     for m in messages:
-        send_telegram(m)
-        log_event(m)
+        send_telegram(m); log_event(m)
     return messages
 
 # -----------------------
@@ -896,10 +823,6 @@ def in_sl_cooldown(pair: str, ts: pd.Timestamp) -> bool:
     return (ts.tz_convert(timezone.utc).to_pydatetime() - last_hit).total_seconds() < COOLDOWN_AFTER_SL_MULT * INTERVAL_SECONDS
 
 def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """
-    Verbose diagnostics: returns same diag_row but also prints the exact checks.
-    Use this to understand why signals are blocked.
-    """
     try:
         last_ts = df.index[-1]
         ctx = ctx or build_signal_context(df)
@@ -908,27 +831,21 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         reasons = []
         if not (ctx['structure_bull'] or ctx['structure_bear']):
             reasons.append("15m structure neutral")
-
         if ctx['structure_bull'] and ctx['long_score'] < LONG_SCORE_THRESHOLD:
             reasons.append(f"Bull score {ctx['long_score']} < {LONG_SCORE_THRESHOLD}")
         if ctx['structure_bear'] and ctx['short_score'] < SHORT_SCORE_THRESHOLD:
             reasons.append(f"Bear score {ctx['short_score']} < {SHORT_SCORE_THRESHOLD}")
-
         if ctx['structure_bull'] and ctx['bull_htf'] <= 0:
             reasons.append("Higher TF not bullish")
         if ctx['structure_bear'] and ctx['bear_htf'] <= 0:
             reasons.append("Higher TF not bearish")
 
         if REQUIRE_1H_AGREEMENT:
-            if ctx['structure_bull'] and ctx['bias_1h'] is False:
-                reasons.append("1H not bullish")
-            if ctx['structure_bear'] and ctx['bias_1h'] is True:
-                reasons.append("1H bullish (blocks short)")
+            if ctx['structure_bull'] and ctx['bias_1h'] is False: reasons.append("1H not bullish")
+            if ctx['structure_bear'] and ctx['bias_1h'] is True:  reasons.append("1H bullish (blocks short)")
         if REQUIRE_4H_AGREEMENT:
-            if ctx['structure_bull'] and ctx['bias_4h'] is False:
-                reasons.append("4H not bullish")
-            if ctx['structure_bear'] and ctx['bias_4h'] is True:
-                reasons.append("4H bullish (blocks short)")
+            if ctx['structure_bull'] and ctx['bias_4h'] is False: reasons.append("4H not bullish")
+            if ctx['structure_bear'] and ctx['bias_4h'] is True:  reasons.append("4H bullish (blocks short)")
 
         if not ctx['volume_ok']:
             reasons.append(f"Volume ratio {ctx['volume_ratio']:.2f} < {VOLUME_MIN_MULT}")
@@ -944,7 +861,6 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         else:
             simulated_sl = 0
         pos_qty = calculate_position_size(pair, last_row['close'], simulated_sl, account_balance, risk_frac) if risk_frac > 0 and simulated_sl and simulated_sl != last_row['close'] else 0.0
-
         if pos_qty <= 0:
             reasons.append("Position size 0 (vol filter / stop too tight / balance small)")
 
@@ -957,38 +873,22 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
             'timestamp': last_ts.isoformat(),
             'pair': pair,
             'price': float(last_row['close']),
-            'ema20': ctx['ema20'],
-            'ema50': ctx['ema50'],
-            'ema_slope': ctx['ema_slope'],
-            'rsi': ctx['rsi'],
-            'atr': ctx['atr'],
-            'atr_pct': ctx['atr_pct'],
-            'atr_low': ctx['atr_low'],
-            'atr_high': ctx['atr_high'],
-            'atr_regime': ctx['atr_regime'],
-            'vol': ctx['volume'],
-            'vol_ma20': ctx['volume_ma20'],
-            'volume_ratio': ctx['volume_ratio'],
-            'volume_ok': ctx['volume_ok'],
-            'bias_1h': ctx['bias_1h'],
-            'bias_4h': ctx['bias_4h'],
-            'htf_slope_1h': ctx['htf_slopes'].get('1H'),
-            'htf_slope_4h': ctx['htf_slopes'].get('4H'),
-            'bull_score': ctx['long_score'],
-            'bear_score': ctx['short_score'],
-            'pattern': ctx['pattern_info']['pattern'],
-            'pattern_bias': ctx['pattern_info']['bias'],
-            'bull_htf': ctx['bull_htf'],
-            'bear_htf': ctx['bear_htf'],
-            'risk_frac': risk_frac,
-            'pos_qty': pos_qty,
-            'pullback_ok': ctx['pullback_ok'],
-            'passed': passed,
-            'reasons': "; ".join(reasons) if reasons else "OK",
+            'ema20': ctx['ema20'], 'ema50': ctx['ema50'], 'ema_slope': ctx['ema_slope'],
+            'rsi': ctx['rsi'], 'atr': ctx['atr'], 'atr_pct': ctx['atr_pct'],
+            'atr_low': ctx['atr_low'], 'atr_high': ctx['atr_high'], 'atr_regime': ctx['atr_regime'],
+            'vol': ctx['volume'], 'vol_ma20': ctx['volume_ma20'],
+            'volume_ratio': ctx['volume_ratio'], 'volume_ok': ctx['volume_ok'],
+            'bias_1h': ctx['bias_1h'], 'bias_4h': ctx['bias_4h'],
+            'htf_slope_1h': ctx['htf_slopes'].get('1H'), 'htf_slope_4h': ctx['htf_slopes'].get('4H'),
+            'bull_score': ctx['long_score'], 'bear_score': ctx['short_score'],
+            'pattern': ctx['pattern_info']['pattern'], 'pattern_bias': ctx['pattern_info']['bias'],
+            'bull_htf': ctx['bull_htf'], 'bear_htf': ctx['bear_htf'],
+            'risk_frac': risk_frac, 'pos_qty': pos_qty, 'pullback_ok': ctx['pullback_ok'],
+            'passed': passed, 'reasons': "; ".join(reasons) if reasons else "OK",
         }
         append_named_csv('diagnostics', diag_row)
 
-        # PRINT full verbose diagnostics to console
+        # Verbose console print
         print("\n--- VERBOSE DIAGNOSTICS ---")
         print(f"Time (UTC): {last_ts}  Price: {last_row['close']:.2f}")
         print(f"  - Structure bull: {ctx['structure_bull']}  bear: {ctx['structure_bear']}")
@@ -1003,15 +903,12 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         print("  -> Reasons:", diag_row['reasons'])
         print("--- end diag ---\n")
 
-        # Brief Telegram DIAG only when rate-limited criteria meet
         close_score = None
         threshold = LONG_SCORE_THRESHOLD
         if ctx['structure_bull']:
-            close_score = ctx['long_score']
-            threshold = LONG_SCORE_THRESHOLD
+            close_score = ctx['long_score']; threshold = LONG_SCORE_THRESHOLD
         elif ctx['structure_bear']:
-            close_score = ctx['short_score']
-            threshold = SHORT_SCORE_THRESHOLD
+            close_score = ctx['short_score']; threshold = SHORT_SCORE_THRESHOLD
 
         if SEND_DIAGNOSTICS_TO_TELEGRAM and should_send_diag(pair, ctx, passed, close_score, threshold):
             brief = (
@@ -1032,17 +929,14 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
 # === Signal Generation & Diagnostics ===
 def check_signal(symbol, df):
     try:
-        # Basic safety check
         if df is None or len(df) < 50:
             print(f"[{symbol}] ❌ Not enough data to analyze.")
             return None
-
         signals_df, _ = generate_signals_from_df(symbol, df)
         if signals_df.empty:
             pattern_info = detect_candlestick_pattern(df.iloc[-2], df.iloc[-1])
             print(f"[{symbol}] 🔍 No actionable setup (pattern {pattern_info['pattern']}, bias {pattern_info['bias']}).")
             return None
-
         latest_signal = signals_df.iloc[-1]
         reason = (
             f"Score {latest_signal.get('score')} {latest_signal['signal']} with pattern {latest_signal.get('pattern')}"
@@ -1173,19 +1067,12 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         signals.append({
             'timestamp': last.name,
             'signal': 'LONG',
-            'entry': entry,
-            'sl': sl,
-            'tp1': tp1,
-            'tp2': tp2,
-            'pattern': ctx['pattern_info']['pattern'],
-            'pattern_bias': ctx['pattern_info']['bias'],
-            'rsi': ctx['rsi'],
-            'score': ctx['long_score'],
-            'atr_pct': ctx['atr_pct'],
-            'volume_ratio': ctx['volume_ratio'],
+            'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2,
+            'pattern': ctx['pattern_info']['pattern'], 'pattern_bias': ctx['pattern_info']['bias'],
+            'rsi': ctx['rsi'], 'score': ctx['long_score'],
+            'atr_pct': ctx['atr_pct'], 'volume_ratio': ctx['volume_ratio'],
             'htf_confluence': ctx['bull_htf'],
-            'risk_frac': adjusted_risk_long,
-            'atr_regime': ctx['atr_regime'],
+            'risk_frac': adjusted_risk_long, 'atr_regime': ctx['atr_regime'],
         })
     elif short_ok:
         sl = entry + atr_component
@@ -1194,19 +1081,12 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         signals.append({
             'timestamp': last.name,
             'signal': 'SHORT',
-            'entry': entry,
-            'sl': sl,
-            'tp1': tp1,
-            'tp2': tp2,
-            'pattern': ctx['pattern_info']['pattern'],
-            'pattern_bias': ctx['pattern_info']['bias'],
-            'rsi': ctx['rsi'],
-            'score': ctx['short_score'],
-            'atr_pct': ctx['atr_pct'],
-            'volume_ratio': ctx['volume_ratio'],
+            'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2,
+            'pattern': ctx['pattern_info']['pattern'], 'pattern_bias': ctx['pattern_info']['bias'],
+            'rsi': ctx['rsi'], 'score': ctx['short_score'],
+            'atr_pct': ctx['atr_pct'], 'volume_ratio': ctx['volume_ratio'],
             'htf_confluence': ctx['bear_htf'],
-            'risk_frac': adjusted_risk_short,
-            'atr_regime': ctx['atr_regime'],
+            'risk_frac': adjusted_risk_short, 'atr_regime': ctx['atr_regime'],
         })
     else:
         if cooldown_block: skip_reasons.append('cooldown_active')
@@ -1250,7 +1130,7 @@ def main_loop():
                 now_ts = pd.Timestamp(now_utc())
 
                 # --- Monitor open trades ---
-                check_trades_and_notify(pair, current_price)  # simulated trades
+                check_trades_and_notify(pair, current_price)
 
                 if now_ts < candle_close:
                     log_event(f"[{pair}] Candle open; monitored trades; price {current_price:.2f}")
@@ -1299,30 +1179,22 @@ def main_loop():
                                 msg += f"\nTime(candle close): {ts_to_local_str(latest_signal['timestamp'])}"
                                 send_telegram(msg)
                                 meta = {
-                                    'pattern': pattern,
-                                    'pattern_bias': pattern_bias,
-                                    'rsi': rsi_val,
-                                    'score': score,
-                                    'atr_pct': atr_pct,
-                                    'volume_ratio': volume_ratio,
+                                    'pattern': pattern, 'pattern_bias': pattern_bias,
+                                    'rsi': rsi_val, 'score': score, 'atr_pct': atr_pct, 'volume_ratio': volume_ratio,
                                     'htf_confluence': latest_signal.get('htf_confluence'),
-                                    'risk_frac': risk_frac,
-                                    'atr_regime': latest_signal.get('atr_regime'),
+                                    'risk_frac': risk_frac, 'atr_regime': latest_signal.get('atr_regime'),
                                 }
                                 open_simulated_trade(pair, latest_signal['signal'], entry, sl, tp1, tp2, meta)
                                 last_sent_signal_ts[pair] = ts_key
                         else:
                             log_event(f"{pair} No new closed-candle signal (already sent for this candle).")
                 else:
-                    reasons = []
-                    if ctx:
-                        reasons = ctx.get('skip_reasons', [])
+                    reasons = ctx.get('skip_reasons', []) if ctx else []
                     if reasons:
                         log_event(f"[{pair}] No signals this closed candle. Reasons: {', '.join(sorted(set(reasons)))}")
                     else:
                         log_event(f"[{pair}] No signals this closed candle.")
 
-                # Small delay to avoid rate limit
                 time.sleep(2)
 
             # End-of-cycle: periodic summary
