@@ -27,8 +27,8 @@ BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET", "")
 
 # Telegram (required to receive alerts)
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8421566316:AAHEc8RsvjPZTXS9BIYbQ5__n92MLTiut68")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "6055044818")
 
 # Pairs to monitor (primary pair first)
 PAIRS = ["ETHUSDT", "BTCUSDT", "SOLUSDT"]
