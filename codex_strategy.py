@@ -19,6 +19,42 @@ try:
 except Exception:
     Client = None
 
+
+# -----------------------
+# .env support
+# -----------------------
+def load_env_file(path: str = ".env") -> None:
+    """Populate os.environ with key/value pairs from a .env file if present."""
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"\'')
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception as exc:
+        print(f"Warning: failed to load {path}: {exc}")
+
+
+def env_flag(key: str, default: bool = False) -> bool:
+    """Parse boolean-ish environment variables (1/true/yes/on)."""
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    return val.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+load_env_file()
+
+
 # -----------------------
 # CONFIG - tweak these
 # -----------------------
@@ -67,16 +103,29 @@ SHORT_SCORE_THRESHOLD = 6
 ATR_REGIME_SHIFT_ENABLED = True
 ATR_REGIME_LOW_SHIFT = 1                 # add 1 point to threshold in low-vol regime
 ATR_REGIME_HIGH_RISK_REDUCTION = 0.3     # cut risk by 30% in high-vol regime
+
 ENABLE_PULLBACK_FILTER = True            # require close within ~0.3% of EMA20
 ENABLE_HTF_SLOPE_ALIGN = True            # 1H/4H EMA slope must agree with direction
 HTF_SLOPE_PERIOD = 20                    # candles for slope calc
+
 ENABLE_SL_COOLDOWN = True
 COOLDOWN_AFTER_SL_MULT = float(os.environ.get("COOLDOWN_AFTER_SL_MULT", 3))
+
 ENABLE_SESSION_GUARD = False
 SESSION_GUARD_HOURS = (0, 6)             # UTC quiet hours window
 SESSION_GUARD_ACTION = os.environ.get("SESSION_GUARD_ACTION", "reduce")
 SESSION_GUARD_RISK_SCALE = float(os.environ.get("SESSION_GUARD_RISK_SCALE", 0.5))
+
 DIAG_RATE_LIMIT_CANDLES = int(os.environ.get("DIAG_RATE_LIMIT_CANDLES", 4))
+
+# --- Adaptive strictness relief (RELAX MODE) ---
+RELAX_STRICTNESS_ENABLED = env_flag("RELAX_STRICTNESS_ENABLED", True)
+RELAX_AFTER_CANDLES = int(os.environ.get("RELAX_AFTER_CANDLES", 12))
+RELAX_THRESHOLD_OFFSET = float(os.environ.get("RELAX_THRESHOLD_OFFSET", 1.0))
+RELAX_DISABLE_PULLBACK = env_flag("RELAX_DISABLE_PULLBACK", True)
+RELAX_ALLOW_SLOPE_MISMATCH = env_flag("RELAX_ALLOW_SLOPE_MISMATCH", False)
+RELAX_RISK_SCALE = float(os.environ.get("RELAX_RISK_SCALE", 0.75))
+RELAX_MAX_RELAXED_CANDLES = int(os.environ.get("RELAX_MAX_RELAXED_CANDLES", 6))
 
 # Stop / TP config
 STOP_METHOD = 'atr'            # 'atr' or 'fixed'
@@ -112,6 +161,7 @@ SYMBOL_PRECISION = {
     "SOLUSDT": 2,
 }
 
+
 # -----------------------
 # Setup clients
 # -----------------------
@@ -126,14 +176,17 @@ else:
     if Client is None:
         print("python-binance not installed — will use public REST for klines.")
 
+
 # -----------------------
 # Utilities
 # -----------------------
 def now_utc() -> datetime:
     return datetime.now(tz=timezone.utc)
 
+
 def now_local() -> datetime:
     return now_utc().astimezone(EAT)
+
 
 def ts_to_local_str(ts) -> str:
     t = pd.to_datetime(ts)
@@ -141,17 +194,21 @@ def ts_to_local_str(ts) -> str:
         t = t.tz_localize('UTC')
     return t.tz_convert(EAT).strftime("%Y-%m-%d %H:%M:%S")
 
+
 def interval_seconds(s: str) -> int:
     unit = s[-1].lower()
     n = int(s[:-1])
     return n * (60 if unit == 'm' else 3600 if unit == 'h' else 86400 if unit == 'd' else 60)
 
+
 INTERVAL_SECONDS = interval_seconds(INTERVAL)
 CYCLE_WAIT_SECONDS = INTERVAL_SECONDS
+
 
 def _backoff_delays():
     for delay in (0.5, 1.0, 2.0):
         yield delay
+
 
 def _with_backoff(func, *args, **kwargs):
     last_err = None
@@ -164,6 +221,7 @@ def _with_backoff(func, *args, **kwargs):
     if last_err:
         raise last_err
     raise RuntimeError("backoff failed without attempts")
+
 
 def send_telegram(text: str) -> dict:
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -186,6 +244,7 @@ def send_telegram(text: str) -> dict:
         log_event(f"Telegram error: {e}")
         return {"ok": False, "error": str(e)}
 
+
 def ensure_csv_headers(path: str, columns: List[str]):
     """Guarantee that a CSV file exists with the provided header order."""
     try:
@@ -197,6 +256,7 @@ def ensure_csv_headers(path: str, columns: List[str]):
         pd.DataFrame(columns=columns).to_csv(path, index=False)
     except Exception as e:
         print("CSV init error:", e)
+
 
 def append_csv(path: str, row: Dict[str, Any], columns: Optional[List[str]] = None):
     if not row:
@@ -212,6 +272,7 @@ def append_csv(path: str, row: Dict[str, Any], columns: Optional[List[str]] = No
             df_row.to_csv(f, header=f.tell() == 0, index=False)
     except Exception as e:
         print("CSV write error:", e)
+
 
 # ---- Daily-rotated CSVs ----
 CSV_DEFINITIONS = {
@@ -235,11 +296,13 @@ CSV_DEFINITIONS = {
 CURRENT_CSV_DATE = None
 CSV_PATHS: Dict[str, str] = {}
 
+
 def _daily_csv_name(base: str, date_str: str) -> str:
     root, ext = os.path.splitext(base)
     if not ext:
         ext = '.csv'
     return f"{root}_{date_str}{ext}"
+
 
 def ensure_daily_csvs():
     global CURRENT_CSV_DATE, CSV_PATHS
@@ -253,12 +316,14 @@ def ensure_daily_csvs():
         CSV_PATHS[name] = path
         ensure_csv_headers(path, cfg['columns'])
 
+
 def append_named_csv(name: str, row: Dict[str, Any]):
     ensure_daily_csvs()
     path = CSV_PATHS.get(name)
     if not path:
         return
     append_csv(path, row, CSV_DEFINITIONS[name]['columns'])
+
 
 def compute_dynamic_risk_frac(atr_pct: float) -> float:
     """Return a risk fraction adjustment based on volatility."""
@@ -281,6 +346,7 @@ def compute_dynamic_risk_frac(atr_pct: float) -> float:
         risk *= 0.75
     return risk
 
+
 def log_event(msg: str):
     ts = now_local().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
@@ -291,11 +357,13 @@ def log_event(msg: str):
     except Exception:
         pass
 
+
 # -----------------------
 # Indicators / strategy
 # -----------------------
 def ema(series: pd.Series, period: int):
     return series.ewm(span=period, adjust=False).mean()
+
 
 def rsi(series: pd.Series, period: int = 14):
     delta = series.diff()
@@ -306,6 +374,7 @@ def rsi(series: pd.Series, period: int = 14):
     rs = ma_up / (ma_down + 1e-10)
     return 100 - (100 / (1 + rs))
 
+
 def atr(df: pd.DataFrame, period: int = 14):
     high = df['high']; low = df['low']; close = df['close']
     tr1 = high - low
@@ -313,6 +382,7 @@ def atr(df: pd.DataFrame, period: int = 14):
     tr3 = (low - close.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(period, min_periods=1).mean()
+
 
 def resample_tf(df_small: pd.DataFrame, rule: str) -> pd.DataFrame:
     # Expect uppercase rules like '1H', '4H'
@@ -326,7 +396,9 @@ def resample_tf(df_small: pd.DataFrame, rule: str) -> pd.DataFrame:
     res = pd.DataFrame({'open': o, 'high': h, 'low': l, 'close': c, 'volume': v})
     return res.dropna()
 
+
 def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str, Any]:
+    """Return candlestick pattern insights for the last two candles."""
     pattern = None
     bias = 'neutral'
     prev_open, prev_close = prev['open'], prev['close']
@@ -345,7 +417,7 @@ def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str,
     curr_upper = upper_shadow(cur_open, cur_close, cur_high)
     curr_lower = lower_shadow(cur_open, cur_close, cur_low)
 
-    # Bullish
+    # Bullish patterns
     if prev_close < prev_open and cur_close > cur_open:
         if cur_close >= prev_open and cur_open <= prev_close and curr_body > prev_body:
             pattern = 'bullish_engulfing'; bias = 'bullish'
@@ -353,7 +425,7 @@ def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str,
         if curr_lower >= 2 * curr_body and curr_upper <= curr_body * 0.5:
             pattern = 'bullish_hammer'; bias = 'bullish'
 
-    # Bearish
+    # Bearish patterns
     if prev_close > prev_open and cur_close < cur_open:
         if cur_open >= prev_close and cur_close <= prev_open and curr_body > prev_body:
             pattern = 'bearish_engulfing'; bias = 'bearish'
@@ -361,9 +433,15 @@ def detect_candlestick_pattern(prev: pd.Series, current: pd.Series) -> Dict[str,
         if curr_upper >= 2 * curr_body and curr_lower <= curr_body * 0.5:
             pattern = 'bearish_shooting_star'; bias = 'bearish'
 
-    return {'pattern': pattern, 'bias': bias, 'details': {'curr_body': curr_body, 'curr_upper': curr_upper, 'curr_lower': curr_lower}}
+    return {
+        'pattern': pattern,
+        'bias': bias,
+        'details': {'curr_body': curr_body, 'curr_upper': curr_upper, 'curr_lower': curr_lower}
+    }
+
 
 def higher_tf_trend(df: pd.DataFrame, rule: str) -> Optional[bool]:
+    """Determine if the higher timeframe trend is bullish (True), bearish (False) or unknown (None)."""
     try:
         res = resample_tf(df, rule)
         if res.empty:
@@ -377,7 +455,9 @@ def higher_tf_trend(df: pd.DataFrame, rule: str) -> Optional[bool]:
     except Exception:
         return None
 
+
 def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
+    """Compute reusable context for diagnostics and signal evaluation."""
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -412,7 +492,7 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
     volume_ratio = (vol_last / vol_ma20) if vol_ma20 else 0.0
     volume_ok = volume_ratio >= VOLUME_MIN_MULT
 
-    pattern_info = detect_candlestick_pattern(df.iloc[-2], df.iloc[-1])
+    pattern_info = detect_candlestick_pattern(prev, last)
 
     crossed_up = ema_diff_prev < 0 and ema_diff_last > 0
     crossed_down = ema_diff_prev > 0 and ema_diff_last < 0
@@ -489,6 +569,7 @@ def build_signal_context(df: pd.DataFrame) -> Dict[str, Any]:
         'last': last, 'prev': prev
     }
 
+
 # -----------------------
 # Live data helpers
 # -----------------------
@@ -519,6 +600,7 @@ def get_klines_df(symbol: str, interval: str = INTERVAL, limit: int = 500) -> pd
         log_event(f"get_klines_df error for {symbol}: {e}")
         raise
 
+
 def get_current_price(symbol: str) -> float:
     try:
         if client is not None:
@@ -536,6 +618,7 @@ def get_current_price(symbol: str) -> float:
         log_event(f"get_current_price error {symbol}: {e}")
         raise
 
+
 # -----------------------
 # Position sizing & account simulation
 # -----------------------
@@ -549,6 +632,12 @@ last_atr_regime: Dict[str, Optional[str]] = {pair: None for pair in PAIRS}
 last_volume_ok: Dict[str, Optional[bool]] = {pair: None for pair in PAIRS}
 diagnostic_cooldown: Dict[str, int] = {pair: DIAG_RATE_LIMIT_CANDLES for pair in PAIRS}
 
+# Relax-mode trackers
+quiet_candle_streak: Dict[str, int] = {pair: 0 for pair in PAIRS}
+relax_active: Dict[str, bool] = {pair: False for pair in PAIRS}
+relax_candles_remaining: Dict[str, int] = {pair: 0 for pair in PAIRS}
+
+
 def calculate_position_size(symbol: str, entry_price: float, stop_loss: float, balance: float, risk_frac: float) -> float:
     distance = abs(entry_price - stop_loss)
     if distance <= 0:
@@ -559,10 +648,12 @@ def calculate_position_size(symbol: str, entry_price: float, stop_loss: float, b
     factor = 10 ** precision
     return float(math.floor(qty * factor) / factor)
 
+
 def apply_precision(symbol: str, qty: float) -> float:
     precision = SYMBOL_PRECISION.get(symbol, 3)
     factor = 10 ** precision
     return float(math.floor(qty * factor) / factor)
+
 
 def open_simulated_trade(pair: str, signal: str, entry: float, sl: float, tp1: float, tp2: float, meta: Optional[Dict[str, Any]] = None):
     global account_balance
@@ -589,7 +680,8 @@ def open_simulated_trade(pair: str, signal: str, entry: float, sl: float, tp1: f
         'status': 'OPEN', 'sl_to_entry': False, 'realized_pnl': 0.0,
         'risk_frac': risk_frac
     }
-    if meta: trade.update(meta)
+    if meta:
+        trade.update(meta)
     open_trades[ts_key] = trade
     mark_diag_event(pair)
     append_named_csv('open_trades', trade)
@@ -604,12 +696,19 @@ def open_simulated_trade(pair: str, signal: str, entry: float, sl: float, tp1: f
         and vol_ratio is not None and isinstance(vol_ratio, (int, float)) and not math.isnan(float(vol_ratio))
     ):
         score_display = score if score is not None else 'n/a'
-        if isinstance(score_display, float): score_display = int(round(score_display))
-        htf_conf = trade.get('htf_confluence'); htf_display = htf_conf if htf_conf is not None else 'n/a'
-        stats_line = f"\nScore: {score_display} | HTF conf: {htf_display} | Risk: {risk_pct:.2f}% | ATR%: {float(atr_pct):.3f} | VolRatio: {float(vol_ratio):.2f}"
-    send_telegram(f"📥 OPEN_SIM {pair} {signal} qty {qty:.6f} @ {entry:.2f} SL {sl:.2f} TP1 {tp1:.2f} TP2 {tp2:.2f}{pattern_note}" + stats_line)
+        if isinstance(score_display, float):
+            score_display = int(round(score_display))
+        htf_conf = trade.get('htf_confluence')
+        htf_display = htf_conf if htf_conf is not None else 'n/a'
+        stats_line = (
+            f"\nScore: {score_display} | HTF conf: {htf_display} | Risk: {risk_pct:.2f}% | ATR%: {float(atr_pct):.3f} | VolRatio: {float(vol_ratio):.2f}"
+        )
+    send_telegram(
+        f"📥 OPEN_SIM {pair} {signal} qty {qty:.6f} @ {entry:.2f} SL {sl:.2f} TP1 {tp1:.2f} TP2 {tp2:.2f}{pattern_note}" + stats_line
+    )
     log_event(f"Opened {pair} {signal} qty {qty:.6f} @ {entry:.2f}")
     return trade
+
 
 def close_simulated_trade(trade_id: str, result: str, close_price: float):
     global account_balance
@@ -647,7 +746,9 @@ def close_simulated_trade(trade_id: str, result: str, close_price: float):
     log_event(f"Closed {trade['pair']} {signal} {result} @ {close_price:.2f} net {net:.2f}")
     return closed
 
+
 def partial_close_trade(trade_id: str, fraction: float, close_price: float, label: str) -> Optional[Dict[str, Any]]:
+    """Close part of an open trade, updating balance and sending alerts."""
     global account_balance
     trade = open_trades.get(trade_id)
     if not trade:
@@ -703,6 +804,7 @@ def partial_close_trade(trade_id: str, fraction: float, close_price: float, labe
         log_event(f"{trade['pair']} trade fully closed after partial exits.")
     return closed
 
+
 def check_trades_and_notify(pair: str, current_price: float):
     messages = []
     for tid, trade in list(open_trades.items()):
@@ -757,11 +859,13 @@ def check_trades_and_notify(pair: str, current_price: float):
         send_telegram(m); log_event(m)
     return messages
 
+
 # -----------------------
 # Diagnostics logic (per closed candle)
 # -----------------------
 def mark_diag_event(pair: str):
     diagnostic_cooldown[pair] = DIAG_RATE_LIMIT_CANDLES
+
 
 def should_send_diag(pair: str, ctx: Dict[str, Any], passed: bool, close_score: Optional[int], threshold: int) -> bool:
     atr_regime = ctx.get('atr_regime')
@@ -781,6 +885,7 @@ def should_send_diag(pair: str, ctx: Dict[str, Any], passed: bool, close_score: 
     diagnostic_cooldown[pair] = 0
     return True
 
+
 def session_guard_adjust(ts: pd.Timestamp, risk_frac: float) -> Tuple[float, Optional[str]]:
     if not ENABLE_SESSION_GUARD:
         return risk_frac, None
@@ -796,6 +901,7 @@ def session_guard_adjust(ts: pd.Timestamp, risk_frac: float) -> Tuple[float, Opt
         return risk_frac * SESSION_GUARD_RISK_SCALE, 'session_guard_reduce'
     return risk_frac, None
 
+
 def slopes_agree(ctx: Dict[str, Any], direction: str) -> bool:
     if not ENABLE_HTF_SLOPE_ALIGN:
         return True
@@ -810,6 +916,7 @@ def slopes_agree(ctx: Dict[str, Any], direction: str) -> bool:
             return False
     return True
 
+
 def in_sl_cooldown(pair: str, ts: pd.Timestamp) -> bool:
     if not ENABLE_SL_COOLDOWN:
         return False
@@ -822,7 +929,67 @@ def in_sl_cooldown(pair: str, ts: pd.Timestamp) -> bool:
         ts = ts.tz_localize('UTC')
     return (ts.tz_convert(timezone.utc).to_pydatetime() - last_hit).total_seconds() < COOLDOWN_AFTER_SL_MULT * INTERVAL_SECONDS
 
+
+# -------- Relax mode helpers --------
+def relax_adjustments(pair: str) -> Dict[str, Any]:
+    """Return relaxation knobs for the given pair based on recent inactivity."""
+    quiet_candle_streak.setdefault(pair, 0)
+    relax_active.setdefault(pair, False)
+    relax_candles_remaining.setdefault(pair, 0)
+    active = RELAX_STRICTNESS_ENABLED and relax_active.get(pair, False)
+    threshold_delta = RELAX_THRESHOLD_OFFSET if active else 0.0
+    risk_scale = max(0.0, RELAX_RISK_SCALE) if active else 1.0
+    bypass_pullback = active and RELAX_DISABLE_PULLBACK
+    slope_override = active and RELAX_ALLOW_SLOPE_MISMATCH
+    return {
+        'active': active,
+        'threshold_delta': threshold_delta,
+        'risk_scale': risk_scale,
+        'bypass_pullback': bypass_pullback,
+        'slope_override': slope_override,
+    }
+
+
+def update_relax_tracker(pair: str, trade_triggered: bool) -> None:
+    """Track consecutive skipped candles and enable relaxed gating when configured."""
+    if not RELAX_STRICTNESS_ENABLED:
+        return
+
+    quiet_candle_streak.setdefault(pair, 0)
+    relax_active.setdefault(pair, False)
+    relax_candles_remaining.setdefault(pair, 0)
+
+    if trade_triggered:
+        quiet_candle_streak[pair] = 0
+        relax_active[pair] = False
+        relax_candles_remaining[pair] = 0
+        return
+
+    quiet_candle_streak[pair] = quiet_candle_streak.get(pair, 0) + 1
+
+    if relax_active.get(pair, False):
+        if RELAX_MAX_RELAXED_CANDLES > 0:
+            remaining = max(0, relax_candles_remaining.get(pair, 0) - 1)
+            relax_candles_remaining[pair] = remaining
+            if remaining == 0:
+                relax_active[pair] = False
+                log_event(f"[{pair}] Relax mode expired after cooldown window.")
+        return
+
+    if quiet_candle_streak[pair] >= RELAX_AFTER_CANDLES:
+        relax_active[pair] = True
+        relax_candles_remaining[pair] = RELAX_MAX_RELAXED_CANDLES
+        log_event(
+            f"[{pair}] Relax mode enabled after {quiet_candle_streak[pair]} quiet candles (threshold -{RELAX_THRESHOLD_OFFSET},"
+            f" pullback {'off' if RELAX_DISABLE_PULLBACK else 'on'}, risk scale {RELAX_RISK_SCALE:.2f})."
+        )
+
+
 def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Verbose diagnostics: returns same diag_row but also prints the exact checks.
+    Use this to understand why signals are blocked.
+    """
     try:
         last_ts = df.index[-1]
         ctx = ctx or build_signal_context(df)
@@ -903,6 +1070,7 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
         print("  -> Reasons:", diag_row['reasons'])
         print("--- end diag ---\n")
 
+        # Brief Telegram DIAG only when rate-limited criteria meet
         close_score = None
         threshold = LONG_SCORE_THRESHOLD
         if ctx['structure_bull']:
@@ -925,6 +1093,7 @@ def diagnose_candle(pair: str, df: pd.DataFrame, ctx: Optional[Dict[str, Any]] =
     except Exception as e:
         log_event(f"diagnose_candle error: {e}")
         return {}
+
 
 # === Signal Generation & Diagnostics ===
 def check_signal(symbol, df):
@@ -949,6 +1118,7 @@ def check_signal(symbol, df):
     except Exception as e:
         print(f"[{symbol}] ⚠️ Signal error: {e}")
         return None
+
 
 # -----------------------
 # Periodic summary
@@ -979,6 +1149,7 @@ def send_periodic_summary():
     except Exception as e:
         log_event(f"send_periodic_summary error: {e}")
 
+
 def parse_bool(value: str) -> bool:
     if isinstance(value, bool):
         return value
@@ -989,6 +1160,7 @@ def parse_bool(value: str) -> bool:
         return False
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Codex strategy options")
     parser.add_argument("--diag_rate_limit_candles", type=int, default=DIAG_RATE_LIMIT_CANDLES)
@@ -996,6 +1168,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cooldown_after_sl_mult", type=float, default=COOLDOWN_AFTER_SL_MULT)
     parser.add_argument("--atr_regime_shift", type=parse_bool, default=ATR_REGIME_SHIFT_ENABLED)
     return parser.parse_args()
+
 
 # -----------------------
 # MAIN LOOP
@@ -1019,6 +1192,17 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
     adjusted_risk_short = risk_frac
     skip_reasons: List[str] = []
 
+    # Relax info
+    relax_info = relax_adjustments(pair)
+    ctx['quiet_streak'] = quiet_candle_streak.get(pair, 0)
+    ctx['relax_active'] = relax_info['active']
+    ctx['relax_threshold_offset'] = relax_info['threshold_delta'] if relax_info['active'] else 0.0
+    ctx['relax_risk_scale'] = relax_info['risk_scale'] if relax_info['active'] else 1.0
+    ctx['relax_pullback_bypass'] = False
+    ctx['relax_slope_bypass_long'] = False
+    ctx['relax_slope_bypass_short'] = False
+
+    # ATR regime adjustments
     if ATR_REGIME_SHIFT_ENABLED:
         if ctx['atr_regime'] == 'low':
             long_threshold += ATR_REGIME_LOW_SHIFT
@@ -1027,12 +1211,39 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
             adjusted_risk_long *= max(0.0, 1 - ATR_REGIME_HIGH_RISK_REDUCTION)
             adjusted_risk_short *= max(0.0, 1 - ATR_REGIME_HIGH_RISK_REDUCTION)
 
+    # Relax threshold + risk
+    if relax_info['active'] and relax_info['threshold_delta'] > 0:
+        long_threshold = max(1.0, long_threshold - relax_info['threshold_delta'])
+        short_threshold = max(1.0, short_threshold - relax_info['threshold_delta'])
+    if relax_info['active']:
+        adjusted_risk_long *= relax_info['risk_scale']
+        adjusted_risk_short *= relax_info['risk_scale']
+
+    # Session guard
     adjusted_risk_long, session_note_long = session_guard_adjust(last.name, adjusted_risk_long)
     adjusted_risk_short, session_note_short = session_guard_adjust(last.name, adjusted_risk_short)
     if session_note_long:  skip_reasons.append(session_note_long)
     if session_note_short and session_note_short not in skip_reasons:  skip_reasons.append(session_note_short)
 
     cooldown_block = in_sl_cooldown(pair, last.name)
+
+    # Pullback + slope gates with relax bypasses
+    raw_pullback_ok = ctx['pullback_ok']
+    pullback_gate_ok = raw_pullback_ok or (relax_info['active'] and relax_info['bypass_pullback'])
+    if not raw_pullback_ok and pullback_gate_ok:
+        ctx['relax_pullback_bypass'] = True
+
+    long_slope_ok_raw = slopes_agree(ctx, 'LONG')
+    short_slope_ok_raw = slopes_agree(ctx, 'SHORT')
+    long_slope_ok = long_slope_ok_raw
+    short_slope_ok = short_slope_ok_raw
+    if relax_info['active'] and relax_info['slope_override']:
+        if not long_slope_ok and ctx['structure_bull']:
+            long_slope_ok = True
+            ctx['relax_slope_bypass_long'] = True
+        if not short_slope_ok and ctx['structure_bear']:
+            short_slope_ok = True
+            ctx['relax_slope_bypass_short'] = True
 
     long_ok = (
         ctx['structure_bull']
@@ -1042,8 +1253,8 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         and ctx['atr_in_range']
         and ctx['rsi'] >= RSI_LONG_MIN
         and adjusted_risk_long > 0
-        and ctx['pullback_ok']
-        and slopes_agree(ctx, 'LONG')
+        and pullback_gate_ok
+        and long_slope_ok
         and not cooldown_block
     )
 
@@ -1055,8 +1266,8 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         and ctx['atr_in_range']
         and ctx['rsi'] <= RSI_SHORT_MAX
         and adjusted_risk_short > 0
-        and ctx['pullback_ok']
-        and slopes_agree(ctx, 'SHORT')
+        and pullback_gate_ok
+        and short_slope_ok
         and not cooldown_block
     )
 
@@ -1090,9 +1301,12 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
         })
     else:
         if cooldown_block: skip_reasons.append('cooldown_active')
-        if not ctx['pullback_ok'] and (ctx['structure_bull'] or ctx['structure_bear']): skip_reasons.append('pullback_filter')
-        if not slopes_agree(ctx, 'LONG') and ctx['structure_bull']:  skip_reasons.append('htf_slope_mismatch_long')
-        if not slopes_agree(ctx, 'SHORT') and ctx['structure_bear']: skip_reasons.append('htf_slope_mismatch_short')
+        if not raw_pullback_ok and not pullback_gate_ok and (ctx['structure_bull'] or ctx['structure_bear']):
+            skip_reasons.append('pullback_filter')
+        if not long_slope_ok_raw and not ctx['relax_slope_bypass_long'] and ctx['structure_bull']:
+            skip_reasons.append('htf_slope_mismatch_long')
+        if not short_slope_ok_raw and not ctx['relax_slope_bypass_short'] and ctx['structure_bear']:
+            skip_reasons.append('htf_slope_mismatch_short')
         if adjusted_risk_long <= 0 or adjusted_risk_short <= 0:       skip_reasons.append('risk_zero')
         if ctx['atr_regime'] == 'low':  skip_reasons.append('atr_regime_low')
         if ctx['atr_regime'] == 'high': skip_reasons.append('atr_regime_high')
@@ -1104,6 +1318,7 @@ def generate_signals_from_df(pair: str, df: pd.DataFrame) -> Tuple[pd.DataFrame,
     ctx['skip_reasons'] = skip_reasons
 
     return pd.DataFrame(signals), ctx
+
 
 def main_loop():
     global last_summary_time, next_summary_time
@@ -1130,7 +1345,7 @@ def main_loop():
                 now_ts = pd.Timestamp(now_utc())
 
                 # --- Monitor open trades ---
-                check_trades_and_notify(pair, current_price)
+                check_trades_and_notify(pair, current_price)  # simulated trades
 
                 if now_ts < candle_close:
                     log_event(f"[{pair}] Candle open; monitored trades; price {current_price:.2f}")
@@ -1138,6 +1353,7 @@ def main_loop():
                     continue
 
                 # --- Candle closed: diagnose + generate signals ---
+                trade_triggered = False
                 signals_df, ctx = generate_signals_from_df(pair, df)
                 diag = diagnose_candle(pair, df, ctx)
                 if not signals_df.empty:
@@ -1185,6 +1401,7 @@ def main_loop():
                                     'risk_frac': risk_frac, 'atr_regime': latest_signal.get('atr_regime'),
                                 }
                                 open_simulated_trade(pair, latest_signal['signal'], entry, sl, tp1, tp2, meta)
+                                trade_triggered = True
                                 last_sent_signal_ts[pair] = ts_key
                         else:
                             log_event(f"{pair} No new closed-candle signal (already sent for this candle).")
@@ -1195,6 +1412,10 @@ def main_loop():
                     else:
                         log_event(f"[{pair}] No signals this closed candle.")
 
+                if ctx is not None:
+                    update_relax_tracker(pair, trade_triggered)
+
+                # Small delay to avoid rate limit
                 time.sleep(2)
 
             # End-of-cycle: periodic summary
@@ -1218,6 +1439,7 @@ def main_loop():
             except Exception:
                 pass
             time.sleep(15)
+
 
 if __name__ == "__main__":
     args = parse_args()
