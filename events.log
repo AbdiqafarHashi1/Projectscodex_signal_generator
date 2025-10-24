@@ -409,3 +409,35 @@
 [2025-10-23 19:29:34] [BTCUSDT] Candle open; monitored trades; price 109822.79
 [2025-10-23 19:30:37] [SOLUSDT] Candle open; monitored trades; price 191.17
 [2025-10-23 19:31:40] Cycle complete. Sleeping 900s. Balance 100000.00
+[2025-10-23 19:46:41] [ETHUSDT] Candle open; monitored trades; price 3888.82
+[2025-10-23 19:47:44] [BTCUSDT] Candle open; monitored trades; price 109871.49
+[2025-10-23 19:48:47] [SOLUSDT] Candle open; monitored trades; price 191.47
+[2025-10-23 19:49:50] Cycle complete. Sleeping 900s. Balance 100000.00
+[2025-10-23 19:54:58] Interrupted by user — exiting.
+[2025-10-24 05:18:45] 🚀 Codex v3.0 starting main loop...
+[2025-10-24 05:18:46] [ETHUSDT] Candle open; monitored trades; price 3879.66
+[2025-10-24 05:19:48] [BTCUSDT] Candle open; monitored trades; price 110422.80
+[2025-10-24 05:20:50] [SOLUSDT] Candle open; monitored trades; price 191.69
+[2025-10-24 05:21:53] Cycle complete. Sleeping 900s. Balance 100000.00
+[2025-10-24 05:36:54] [ETHUSDT] Candle open; monitored trades; price 3884.18
+[2025-10-24 05:37:56] [BTCUSDT] Candle open; monitored trades; price 110503.81
+[2025-10-24 05:38:59] [SOLUSDT] Candle open; monitored trades; price 192.01
+[2025-10-24 05:40:01] Cycle complete. Sleeping 900s. Balance 100000.00
+[2025-10-24 05:55:02] [ETHUSDT] Candle open; monitored trades; price 3895.75
+[2025-10-24 05:56:04] [BTCUSDT] Candle open; monitored trades; price 110748.63
+[2025-10-24 05:57:06] [SOLUSDT] Candle open; monitored trades; price 192.53
+[2025-10-24 05:58:09] Cycle complete. Sleeping 900s. Balance 100000.00
+[2025-10-24 06:13:10] [ETHUSDT] Candle open; monitored trades; price 3887.90
+[2025-10-24 06:14:12] [BTCUSDT] Candle open; monitored trades; price 110474.11
+[2025-10-24 06:15:15] [SOLUSDT] Candle open; monitored trades; price 191.86
+[2025-10-24 06:16:18] Cycle complete. Sleeping 900s. Balance 100000.00
+[2025-10-24 06:31:19] [ETHUSDT] Candle open; monitored trades; price 3884.93
+[2025-10-24 06:32:22] [BTCUSDT] Candle open; monitored trades; price 110410.40
+[2025-10-24 06:33:24] [SOLUSDT] Candle open; monitored trades; price 191.30
+[2025-10-24 06:34:27] Cycle complete. Sleeping 900s. Balance 100000.00
+[2025-10-24 06:36:33] Interrupted by user — exiting.
+[2025-10-24 06:37:05] 🚀 Codex v3.0 starting main loop...
+[2025-10-24 06:37:06] [ETHUSDT] Candle open; monitored trades; price 3882.05
+[2025-10-24 06:38:07] [BTCUSDT] Candle open; monitored trades; price 110371.99
+[2025-10-24 06:39:08] [SOLUSDT] Candle open; monitored trades; price 191.03
+[2025-10-24 06:40:08] Cycle complete. Sleeping 900s. Balance 100000.00
